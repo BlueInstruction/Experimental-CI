@@ -1,0 +1,59 @@
+name: Build Mesa Turnip Driver
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4 的 SHA
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            ninja-build \
+            pkg-config \
+            python3-pip \
+            python3-mako \
+            glslang-tools \
+            flex \
+            bison \
+            unzip \
+            curl \
+            meson \
+            autoconf \
+            automake \
+            libtool \
+            gettext
+
+      - name: Cache NDK
+        uses: actions/cache@v4
+        with:
+          path: workdir/android-ndk-r27d
+          key: android-ndk-r27d
+
+      - name: Build Turnip
+        run: |
+          chmod +x scripts/build-turnip.sh
+          scripts/build-turnip.sh
+
+      - name: Package
+        run: |
+          cd out
+          zip -9 turnip-adrenotools.zip vulkan.ad07xx.so meta.json
+
+      - name: Create Release
+        uses: softprops/action-gh-release@c9b46fe7aac4b77dca0f3a3fa0fdd4c6c2c4a6c4  # v2 的 SHA
+        with:
+          tag_name: turnip-${{ github.run_number }}
+          name: Mesa Turnip Driver
+          files: out/turnip-adrenotools.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
