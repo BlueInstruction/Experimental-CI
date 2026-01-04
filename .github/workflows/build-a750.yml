@@ -25,6 +25,7 @@ jobs:
           sudo apt install -y \
             ninja-build \
             pkg-config \
+            python3-pip \
             python3-mako \
             meson \
             glslang-tools \
@@ -42,13 +43,17 @@ jobs:
 
       - name: Clone Mesa
         run: |
-          git clone --depth 1 https://gitlab.freedesktop.org/mesa/mesa.git mesa
+          git clone https://gitlab.freedesktop.org/mesa/mesa.git mesa
+          cd mesa
+          git rev-parse --short HEAD > ../MESA_COMMIT
 
       - name: Apply shader cache patch
         run: |
           set -e
           cd mesa
-          git apply ../0006-shader-cache-expand.patch
+
+          echo "Applying shader cache patch (3-way)..."
+          git apply --3way ../0006-shader-cache-expand.patch
 
       - name: Create Android cross file
         run: |
@@ -66,7 +71,7 @@ jobs:
           endian = 'little'
           EOF
 
-      - name: Build Turnip
+      - name: Build Turnip driver
         run: |
           set -e
           cd mesa
@@ -80,7 +85,11 @@ jobs:
             -Dgallium-drivers= \
             -Dbuildtype=release \
             -Db_lto=true \
-            -Dstrip=true
+            -Dstrip=true \
+            -Dglx=disabled \
+            -Degl=disabled \
+            -Dgles1=disabled \
+            -Dgles2=disabled
 
           ninja -C build-android
 
@@ -88,13 +97,14 @@ jobs:
           cp build-android/src/freedreno/vulkan/libvulkan_freedreno.so \
             ../out/vulkan.ad07xx.so
 
-      - name: Package
+      - name: Package driver
         run: |
+          set -e
           cp meta/meta-a750.json out/meta.json
           cd out
           zip -9 turnip-adreno-a750.zip vulkan.ad07xx.so meta.json
 
-      - name: Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: a750-${{ github.run_number }}
