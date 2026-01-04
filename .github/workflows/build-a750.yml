@@ -1,106 +1,101 @@
-name: Turnip Adreno 750
+name: Turnip Adreno A750
 
 on:
-    workflow_dispatch:
+  workflow_dispatch:
 
-env:
-    ANDROID_API: 34
-    NDK_VERSION: r26d
+permissions:
+  contents: write
 
 jobs:
-    build-a750:
-        runs-on: ubuntu-latest
+  build-a750:
+    runs-on: ubuntu-24.04
 
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v4
+    env:
+      TU_A750_SHADER_CACHE: "1"
+      MESA_SHADER_CACHE_MAX_SIZE: "2147483648"
+      ANDROID_API: "34"
+      NDK_VERSION: "r27d"
 
-            - name: Install dependencies
-              run: |
-                  sudo apt update
-                  sudo apt install -y \
-                      meson \
-                      ninja-build \
-                      python3-pip \
-                      flex \
-                      bison \
-                      python3-mako \
-                      glslang-tools \
-                      spirv-tools \
-                      unzip \
-                      curl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-            - name: Install Meson (latest)
-              run: |
-                  pip3 install --user --upgrade meson mako
-                  echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            ninja-build \
+            pkg-config \
+            python3-pip \
+            python3-mako \
+            glslang-tools \
+            flex \
+            bison \
+            unzip \
+            curl \
+            meson
 
-            - name: Download Android NDK
-              run: |
-                  curl -L -o ndk.zip https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
-                  unzip -q ndk.zip
-                  echo "ANDROID_NDK_HOME=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+      - name: Download Android NDK
+        run: |
+          curl -L -o ndk.zip https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
+          unzip -q ndk.zip
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
 
-            - name: Clone Mesa
-              run: |
-                  git clone --depth=1 https://gitlab.freedesktop.org/mesa/mesa.git mesa
-                  cd mesa
-                  git rev-parse --short HEAD > ../mesa_commit.txt
+      - name: Clone Mesa
+        run: |
+          git clone --depth 1 https://gitlab.freedesktop.org/mesa/mesa.git mesa
+          cd mesa
+          git rev-parse --short HEAD > ../MESA_COMMIT
 
-            - name: Create Meson cross file
-              run: |
-                  cat > android-aarch64 << EOF
-                  [binaries]
-                  c = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang'
-                  cpp = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang++'
-                  ar = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
-                  strip = '${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
+      - name: Apply Shader Cache Patch
+        run: |
+          cd mesa
+          git apply ../patches/a750/0006-shader-cache-expand.patch
 
-                  [host_machine]
-                  system = 'android'
-                  cpu_family = 'aarch64'
-                  cpu = 'aarch64'
-                  endian = 'little'
-                  EOF
+      - name: Create cross file
+        run: |
+          cat > android-aarch64.txt << EOF
+          [binaries]
+          c = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang'
+          cpp = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang++'
+          ar = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
+          strip = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
 
-            - name: Configure Mesa (Turnip)
-              run: |
-                  cd mesa
-                  meson setup build-android \
-                      --cross-file ../android-aarch64 \
-                      -Dplatforms=android \
-                      -Dplatform-sdk-version=${ANDROID_API} \
-                      -Dandroid-stub=true \
-                      -Dvulkan-drivers=freedreno \
-                      -Dfreedreno-kmds=kgsl \
-                      -Dgallium-drivers= \
-                      -Dbuildtype=release \
-                      -Db_lto=true \
-                      -Dstrip=true \
-                      -Dglx=disabled \
-                      -Degl=disabled \
-                      -Dgles1=disabled \
-                      -Dgles2=disabled \
-                      -Dopengl=false
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'armv9'
+          endian = 'little'
+          EOF
 
-            - name: Build Turnip
-              run: |
-                  cd mesa
-                  ninja -C build-android
+      - name: Build Turnip
+        run: |
+          cd mesa
+          meson setup build-android \
+            --cross-file ../android-aarch64.txt \
+            -Dplatforms=android \
+            -Dandroid-stub=true \
+            -Dvulkan-drivers=freedreno \
+            -Dgallium-drivers= \
+            -Dbuildtype=release \
+            -Db_lto=true \
+            -Dstrip=true
 
-            - name: Collect artifacts
-              run: |
-                  mkdir -p out
-                  cp mesa/build-android/src/freedreno/vulkan/libvulkan_freedreno.so out/vulkan.ad07xx.so
-                  cp meta/meta-a750.json out/meta.json
+          ninja -C build-android
 
-            - name: Package driver
-              run: |
-                  cd out
-                  zip -9 turnip-adreno-a750.zip vulkan.ad07xx.so meta.json
+          mkdir -p ../out
+          cp build-android/src/freedreno/vulkan/libvulkan_freedreno.so \
+            ../out/vulkan.ad07xx.so
 
-            - name: Upload artifact
-              uses: actions/upload-artifact@v4
-              with:
-                  name: turnip-adreno-a750
-                  path: out/turnip-adreno-a750.zip
+      - name: Package
+        run: |
+          cp meta/meta-a750.json out/meta.json
+          cd out
+          zip -9 turnip-adreno-a750.zip vulkan.ad07xx.so meta.json
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: a750-${{ github.run_number }}
+          name: Turnip Adreno A750
+          files: out/turnip-adreno-a750.zip
