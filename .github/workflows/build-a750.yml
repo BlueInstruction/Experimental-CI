@@ -27,18 +27,19 @@ jobs:
             pkg-config \
             python3-pip \
             python3-mako \
+            meson \
             glslang-tools \
+            spirv-tools \
             flex \
             bison \
             unzip \
-            curl \
-            meson
+            curl
 
       - name: Download Android NDK
         run: |
           curl -L -o ndk.zip https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
           unzip -q ndk.zip
-          echo "ANDROID_NDK_HOME=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-${NDK_VERSION}" >> "$GITHUB_ENV"
 
       - name: Clone Mesa
         run: |
@@ -46,11 +47,11 @@ jobs:
           cd mesa
           git rev-parse --short HEAD > ../MESA_COMMIT
 
-      - name: Apply A750 patches
+      - name: Apply A750 patch
         run: |
           set -e
           cd mesa
-          git apply ../patches/a750/0006-shader-cache-expand.patch
+          git apply "$GITHUB_WORKSPACE/patches/a750/0006-shader-cache-expand.patch"
 
       - name: Create Android cross file
         run: |
@@ -64,22 +65,29 @@ jobs:
           [host_machine]
           system = 'android'
           cpu_family = 'aarch64'
-          cpu = 'armv9-a'
+          cpu = 'aarch64'
           endian = 'little'
           EOF
 
-      - name: Build Turnip Vulkan driver
+      - name: Build Turnip driver
         run: |
+          set -e
           cd mesa
+
           meson setup build-android \
             --cross-file ../android-aarch64.txt \
             -Dplatforms=android \
             -Dandroid-stub=true \
             -Dvulkan-drivers=freedreno \
+            -Dfreedreno-kmds=kgsl \
             -Dgallium-drivers= \
             -Dbuildtype=release \
             -Db_lto=true \
-            -Dstrip=true
+            -Dstrip=true \
+            -Dglx=disabled \
+            -Degl=disabled \
+            -Dgles1=disabled \
+            -Dgles2=disabled
 
           ninja -C build-android
 
@@ -87,8 +95,9 @@ jobs:
           cp build-android/src/freedreno/vulkan/libvulkan_freedreno.so \
             ../out/vulkan.ad07xx.so
 
-      - name: Package Turnip driver
+      - name: Package driver
         run: |
+          set -e
           cp meta/meta-a750.json out/meta.json
           cd out
           zip -9 turnip-adreno-a750.zip vulkan.ad07xx.so meta.json
