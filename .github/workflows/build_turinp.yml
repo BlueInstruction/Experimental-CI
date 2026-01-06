@@ -1,36 +1,125 @@
-name: Build Turnip Driver
+# MesaTurnipDriver/.github/workflows/build_turnip.yml
+name: Build Mesa Turnip Driver
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ main ]
-  workflow_dispatch:
+    branches: [ "main" ]
+
+env:
+  DEBIAN_FRONTEND: noninteractive
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git python3 meson ninja-build pkg-config zip
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential \
+          git \
+          python3 \
+          python3-mako \
+          meson \
+          ninja-build \
+          pkg-config \
+          libdrm-dev \
+          libexpat1-dev \
+          libx11-dev \
+          libx11-xcb-dev \
+          libxcb-dri3-dev \
+          libxcb-present-dev \
+          libxcb-randr0-dev \
+          libxcb-shm0-dev \
+          libxcb-xfixes0-dev \
+          libxcb1-dev \
+          libxext-dev \
+          libxrandr-dev \
+          libxshmfence-dev \
+          libxxf86vm-dev \
+          xorg-dev \
+          libvulkan-dev \
+          glslang-tools \
+          libwayland-dev \
+          wayland-protocols \
+          libandroid-sdk-ndk-dev \
+          android-ndk
 
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r26d
+    - name: Set up NDK
+      run: |
+        echo "ANDROID_NDK_ROOT=$ANDROID_NDK_HOME" >> $GITHUB_ENV
+        echo "NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
 
-      - name: Build Turnip
-        run: |
-          bash scripts/build_turinp
+    - name: Apply Patch
+      run: |
+        git apply 000001.patch
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: turnip-driver
-          path: out/turnip_adreno_emulator.zip
+    - name: Configure Mesa with Meson
+      run: |
+        meson setup build \
+          --cross-file android-aarch64 \
+          --buildtype release \
+          -Dplatforms=android \
+          -Dgallium-drivers=turnip \
+          -Dvulkan-drivers=adreno \
+          -Dvulkan-beta=true \
+          -Dandroid-stub=true \
+          -Dstrip=true \
+          -Dbuildtype=release
+
+    - name: Compile Mesa
+      run: |
+        ninja -C build
+
+    - name: Create Package Directory
+      run: |
+        mkdir -p package/lib/arm64-v8a
+
+    - name: Copy Vulkan Driver
+      run: |
+        cp build/src/vulkan/drivers/turnip/libvulkan_turnip.so package/lib/arm64-v8a/vulkan.ad07xx.so
+
+    - name: Create meta.json
+      run: |
+        cat > package/meta.json << EOF
+        {
+          "arch": "arm64-v8a",
+          "abi": "arm64-v8a",
+          "id": "mesa_adreno_driver",
+          "version": "25.3.3",
+          "name": "Mesa Turnip Driver (Adreno)",
+          "author": "Mesa Project",
+          "description": "Mesa Turnip Vulkan driver for Adreno GPUs, optimized for Android emulators."
+        }
+        EOF
+
+    - name: Create ZIP Archive
+      run: |
+        cd package && zip -r ../MesaTurnipDriver-v25.3.3.zip .
+
+    - name: Upload Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: MesaTurnipDriver-v25.3.3
+        path: MesaTurnipDriver-v25.3.3.zip
+
+    - name: Create Release
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v25.3.3
+        release_name: Mesa Turnip Driver v25.3.3
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+        artifacts: MesaTurnipDriver-v25.3.3.zip
