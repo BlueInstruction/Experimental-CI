@@ -15,14 +15,29 @@ rm -rf mesa "$BUILD_DIR"
 echo ">>> [2/6] Cloning Mesa ($MESA_VERSION)..."
 git clone --depth 1 --branch "$MESA_VERSION" "$MESA_URL" mesa
 
-echo ">>> [3/6] Applying Production Patch..."
+echo ">>> [3/6] Applying Secret Recipe via Direct Injection..."
 cd mesa
+TARGET_FILE="src/freedreno/vulkan/tu_device.c"
 
-git apply ../patches/0001-tu-device-env.patch
+# Direct injection: Find the line after instance->api_version and insert the optimizations
+# This bypasses git apply corruption issues.
+sed -i '/instance->api_version = TU_API_VERSION;/a \
+\
+   if (!getenv("FD_DEV_FEATURES")) {\
+       setenv("FD_DEV_FEATURES", "enable_tp_ubwc_flag_hint=1", 1);\
+   }\
+   if (!getenv("MESA_SHADER_CACHE_MAX_SIZE")) {\
+       setenv("MESA_SHADER_CACHE_MAX_SIZE", "1024M", 1);\
+   }\
+   if (!getenv("TU_DEBUG")) {\
+       setenv("TU_DEBUG", "force_unaligned_device_local", 1);\
+   }' "$TARGET_FILE"
+
+echo "Injection successful into $TARGET_FILE"
 cd ..
 
-echo ">>> [4/6] Configuring Meson with Cross File..."
-
+echo ">>> [4/6] Configuring Meson..."
+# Ensure naming consistency: android-aarch64
 cp android-aarch64 mesa/
 cd mesa
 meson setup "$BUILD_DIR" \
@@ -50,7 +65,7 @@ cat <<EOF > meta.json
 {
   "name": "Turnip v25.3.3 - Adreno 750 Optimized",
   "version": "25.3.3",
-  "description": "Stable build for A750. Patched for UBWC, Cache, and DX12 stability.",
+  "description": "Stable A750 build. UBWC + 1GB Cache + DX12 Optimizations.",
   "library": "vulkan.ad07xx.so"
 }
 EOF
