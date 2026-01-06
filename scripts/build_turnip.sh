@@ -17,12 +17,12 @@ git clone --depth 1 --branch "$MESA_VERSION" "$MESA_URL" mesa
 
 echo ">>> [3/6] Applying Production Patch..."
 cd mesa
-# تطبيق الباتش من المجلد المخصص patches في جذر المستودع
+
 git apply ../patches/0001-tu-device-env.patch
 cd ..
 
 echo ">>> [4/6] Configuring Meson with Cross File..."
-# استخدام الاسم الصحيح والموحد للملف
+
 cp android-aarch64 mesa/
 cd mesa
 meson setup "$BUILD_DIR" \
