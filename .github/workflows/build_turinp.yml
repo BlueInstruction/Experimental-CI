@@ -1,124 +1,38 @@
-name: Build Mesa Turnip Driver
+name: Build Turnip Adreno 750 Optimized
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-env:
-  DEBIAN_FRONTEND: noninteractive
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          build-essential \
-          git \
-          python3 \
-          python3-mako \
-          meson \
-          ninja-build \
-          pkg-config \
-          libdrm-dev \
-          libexpat1-dev \
-          libx11-dev \
-          libx11-xcb-dev \
-          libxcb-dri3-dev \
-          libxcb-present-dev \
-          libxcb-randr0-dev \
-          libxcb-shm0-dev \
-          libxcb-xfixes0-dev \
-          libxcb1-dev \
-          libxext-dev \
-          libxrandr-dev \
-          libxshmfence-dev \
-          libxxf86vm-dev \
-          xorg-dev \
-          libvulkan-dev \
-          glslang-tools \
-          libwayland-dev \
-          wayland-protocols \
-          libandroid-sdk-ndk-dev \
-          android-ndk
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
+          add-to-path: true
 
-    - name: Set up NDK
-      run: |
-        echo "ANDROID_NDK_ROOT=$ANDROID_NDK_HOME" >> $GITHUB_ENV
-        echo "NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          # REMOVED: android-ndk libandroid-sdk-ndk-dev (These caused the error)
+          # ADDED: python3-mako python3-yaml (To avoid some pip issues)
+          sudo apt-get install -y python3-pip python3-setuptools python3-mako python3-yaml ninja-build git bison flex libssl-dev
 
-    - name: Apply Patch
-      run: |
-        git apply 000001.patch
+          # FIX: Ubuntu 24.04 requires --break-system-packages for global pip installs
+          pip3 install meson mako --break-system-packages
 
-    - name: Configure Mesa with Meson
-      run: |
-        meson setup build \
-          --cross-file android-aarch64 \
-          --buildtype release \
-          -Dplatforms=android \
-          -Dgallium-drivers=turnip \
-          -Dvulkan-drivers=adreno \
-          -Dvulkan-beta=true \
-          -Dandroid-stub=true \
-          -Dstrip=true \
-          -Dbuildtype=release
+      - name: Build Turnip Driver
+        run: |
+          chmod +x scripts/build_turnip
+          ./scripts/build_turnip
 
-    - name: Compile Mesa
-      run: |
-        ninja -C build
-
-    - name: Create Package Directory
-      run: |
-        mkdir -p package/lib/arm64-v8a
-
-    - name: Copy Vulkan Driver
-      run: |
-        cp build/src/vulkan/drivers/turnip/libvulkan_turnip.so package/lib/arm64-v8a/vulkan.ad07xx.so
-
-    - name: Create meta.json
-      run: |
-        cat > package/meta.json << EOF
-        {
-          "arch": "arm64-v8a",
-          "abi": "arm64-v8a",
-          "id": "mesa_adreno_driver",
-          "version": "25.3.3",
-          "name": "Mesa Turnip Driver (Adreno)",
-          "author": "Mesa Project",
-          "description": "Mesa Turnip Vulkan driver for Adreno GPUs, optimized for Android emulators."
-        }
-        EOF
-
-    - name: Create ZIP Archive
-      run: |
-        cd package && zip -r ../MesaTurnipDriver-v25.3.3.zip .
-
-    - name: Upload Build Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: MesaTurnipDriver-v25.3.3
-        path: MesaTurnipDriver-v25.3.3.zip
-
-    - name: Create Release
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: v25.3.3
-        release_name: Mesa Turnip Driver v25.3.3
-        draft: false
-        prerelease: false
-        generate_release_notes: true
-        artifacts: MesaTurnipDriver-v25.3.3.zip
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: turnip-adreno750-optimized
+          path: build_output/*.zip
