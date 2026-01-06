@@ -1,275 +1,103 @@
-name: Build Mesa Turnip Ultimate v25.3.3
+name: Build Mesa Turnip v25.3.3 Android (Optimized)
 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      build_type:
-        description: 'Build type'
-        required: true
-        default: 'all'
-        type: choice
-        options:
-        - all
-        - gpu-only
-        - games-only
-        - adreno730
-        - adreno740
-        - adreno750
-        - adreno830
-        - GhostOfTsushima
-        - ForzaHorizon4
-        - Fifa23
-        - HorizonZeroDawn
 
 permissions:
   contents: write
 
-env:
-  MESA_VERSION: "25.3.3"
-  ANDROID_API: 34
-  SHADER_CACHE_GPU: "2048M"
-  SHADER_CACHE_GAME: "4096M"
-
 jobs:
-  setup:
-    runs-on: ubuntu-24.04
-    outputs:
-      build_matrix: ${{ steps.filter.outputs.matrix }}
-    steps:
-      - name: Determine build targets
-        id: filter
-        run: |
-          BUILD_TYPE="${{ github.event.inputs.build_type || 'all' }}"
-          
-          # Define all targets with correct GPU mappings
-          # Adreno 730: Snapdragon 8 Gen 1
-          # Adreno 740: Snapdragon 8+ Gen 1
-          # Adreno 750: Snapdragon 8 Gen 3
-          # Adreno 830: Future/Experimental (Snapdragon 8 Elite/Gen 4)
-          ALL_TARGETS='[
-            {"target": "adreno730", "type": "gpu", "arch": "armv8.2-a", "optimization": "balanced", "chipset": "Snapdragon 8 Gen 1"},
-            {"target": "adreno740", "type": "gpu", "arch": "armv8.4-a", "optimization": "aggressive", "chipset": "Snapdragon 8+ Gen 1"},
-            {"target": "adreno750", "type": "gpu", "arch": "armv8.5-a", "optimization": "maximum", "chipset": "Snapdragon 8 Gen 3"},
-            {"target": "adreno830", "type": "gpu", "arch": "armv9-a", "optimization": "maximum", "chipset": "Snapdragon 8 Elite/Gen 4", "experimental": true},
-            {"target": "GhostOfTsushima", "type": "game", "arch": "armv8.5-a", "optimization": "maximum", "chipset": "Adreno 700+ Series"},
-            {"target": "ForzaHorizon4", "type": "game", "arch": "armv8.5-a", "optimization": "aggressive", "chipset": "Adreno 700+ Series"},
-            {"target": "Fifa23", "type": "game", "arch": "armv8.4-a", "optimization": "balanced", "chipset": "Adreno 700+ Series"},
-            {"target": "HorizonZeroDawn", "type": "game", "arch": "armv8.5-a", "optimization": "maximum", "chipset": "Adreno 700+ Series"}
-          ]'
-          
-          # Install jq if not present
-          if ! command -v jq &> /dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y jq
-          fi
-          
-          # Use jq for reliable JSON filtering
-          case "$BUILD_TYPE" in
-            "all")
-              FILTERED_TARGETS="$ALL_TARGETS"
-              ;;
-            "gpu-only")
-              FILTERED_TARGETS=$(echo "$ALL_TARGETS" | jq '[.[] | select(.type == "gpu")]')
-              ;;
-            "games-only")
-              FILTERED_TARGETS=$(echo "$ALL_TARGETS" | jq '[.[] | select(.type == "game")]')
-              ;;
-            *)
-              # Single target
-              FILTERED_TARGETS=$(echo "$ALL_TARGETS" | jq --arg t "$BUILD_TYPE" '[.[] | select(.target == $t)]')
-              ;;
-          esac
-          
-          # Validate output
-          if [ -z "$FILTERED_TARGETS" ] || [ "$FILTERED_TARGETS" = "[]" ]; then
-            echo "Error: No targets found for build type: $BUILD_TYPE"
-            exit 1
-          fi
-          
-          echo "matrix=$FILTERED_TARGETS" >> $GITHUB_OUTPUT
-
   build:
-    needs: setup
     runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        target: ${{ fromJson(needs.setup.outputs.build_matrix) }}
+
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      - name: Cache NDK
-        id: cache-ndk
-        uses: actions/cache@v3
-        with:
-          path: android-ndk-r29
-          key: ${{ runner.os }}-ndk-r29-${{ hashFiles('.github/workflows/Build.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-ndk-r29-
-
-      - name: Cache Mesa source
-        id: cache-mesa
-        uses: actions/cache@v3
-        with:
-          path: mesa
-          key: ${{ runner.os }}-mesa-${{ env.MESA_VERSION }}-${{ hashFiles('.github/patches/*') }}
-          restore-keys: |
-            ${{ runner.os }}-mesa-${{ env.MESA_VERSION }}-
-            ${{ runner.os }}-mesa-
-
-      - name: Download Android NDK if not cached
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
+      - name: Install dependencies
         run: |
+          set -e
+          sudo apt update
+          sudo apt install -y \
+            ninja-build meson python3-pip python3-mako flex bison \
+            glslang-tools spirv-tools patchelf curl unzip git lld clang
+          pip3 install --user --upgrade meson mako
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Download Android NDK r29
+        run: |
+          set -e
           curl -L -o ndk.zip https://dl.google.com/android/repository/android-ndk-r29-linux.zip
           unzip -q ndk.zip
           echo "ANDROID_NDK_HOME=$PWD/android-ndk-r29" >> $GITHUB_ENV
 
-      - name: Clone Mesa if not cached
-        if: steps.cache-mesa.outputs.cache-hit != 'true'
+      - name: Create Android cross file (Optimized)
         run: |
-          git clone --depth 1 --branch mesa-${{ env.MESA_VERSION }} https://gitlab.freedesktop.org/mesa/mesa.git mesa
-          cd mesa
-          MESA_COMMIT=$(git rev-parse --short HEAD)
-          echo "MESA_COMMIT=$MESA_COMMIT" >> $GITHUB_ENV
-
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            ninja-build meson python3-pip python3-mako \
-            flex bison glslang-tools spirv-tools \
-            patchelf curl unzip git lld clang \
-            libdrm-dev libelf-dev libexpat1-dev \
-            libpng-dev libxcb-present-dev \
-            libxshmfence-dev libxrandr-dev \
-            libwayland-dev wayland-protocols \
-            jq
-          
-          pip3 install --user --upgrade meson mako
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-      - name: Create Android cross file
-        run: |
+          set -e
           cat > android-aarch64 << EOF
 [constants]
-ndk_path = '${{ env.ANDROID_NDK_HOME }}'
+ndk_path = '$ANDROID_NDK_HOME'
 
 [binaries]
 ar = "\${ndk_path}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-ar"
-c = ["\${ndk_path}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.ANDROID_API }}-clang", "-fPIC"]
-cpp = ["\${ndk_path}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.ANDROID_API }}-clang++", "-fPIC", "-static-libstdc++"]
+c = ["\${ndk_path}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang", "-march=armv8.5-a", "-O3", "-fno-plt", "-flto"]
+cpp = ["\${ndk_path}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang++", "-march=armv8.5-a", "-O3", "-fno-plt", "-fno-exceptions", "-fno-unwind-tables", "-static-libstdc++", "-flto"]
 c_ld = "lld"
 cpp_ld = "lld"
 strip = "\${ndk_path}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-strip"
-pkgconfig = "/usr/bin/pkg-config"
 
 [host_machine]
 system = "android"
 cpu_family = "aarch64"
 cpu = "armv8"
 endian = "little"
-
-[properties]
-needs_exe_wrapper = true
 EOF
 
-      - name: Configure optimization flags
-        id: configure-flags
+      - name: Clone Mesa 25.3.3
         run: |
-          TARGET_TYPE="${{ matrix.target.type }}"
-          OPTIMIZATION="${{ matrix.target.optimization }}"
-          ARCH="${{ matrix.target.arch }}"
-          
-          BASE_FLAGS="-fPIC -fno-plt -fvisibility=hidden"
-          ARCH_FLAGS="-march=$ARCH"
-          
-          case "$OPTIMIZATION" in
-            "maximum")
-              OPT_FLAGS="-O3 -flto -funroll-loops -fomit-frame-pointer -funsafe-math-optimizations"
-              ;;
-            "aggressive")
-              OPT_FLAGS="-O3 -flto"
-              ;;
-            "balanced")
-              OPT_FLAGS="-O2 -flto"
-              ;;
-            *)
-              OPT_FLAGS="-O2"
-              ;;
-          esac
-          
-          # Special handling for experimental armv9-a target
-          if [ "$ARCH" = "armv9-a" ] && [ "${{ matrix.target.target }}" = "adreno830" ]; then
-            echo "Warning: Using experimental armv9-a architecture for adreno830"
-            # Add compatibility flags for armv9-a
-            C_FLAGS="$BASE_FLAGS $ARCH_FLAGS $OPT_FLAGS -mno-outline-atomics"
-            CXX_FLAGS="$BASE_FLAGS $ARCH_FLAGS $OPT_FLAGS -fno-exceptions -fno-unwind-tables -fno-rtti -mno-outline-atomics"
-          else
-            C_FLAGS="$BASE_FLAGS $ARCH_FLAGS $OPT_FLAGS"
-            CXX_FLAGS="$BASE_FLAGS $ARCH_FLAGS $OPT_FLAGS -fno-exceptions -fno-unwind-tables -fno-rtti"
-          fi
-          
-          echo "C_FLAGS=$C_FLAGS" >> $GITHUB_OUTPUT
-          echo "CXX_FLAGS=$CXX_FLAGS" >> $GITHUB_OUTPUT
-
-      - name: Apply patches to Mesa
-        run: |
+          set -e
+          git clone --branch mesa-25.3.3 https://gitlab.freedesktop.org/mesa/mesa.git mesa
           cd mesa
-          
+          echo "MESA_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Apply inline patches and environment overrides
+        run: |
+          set -e
+          cd mesa
           TARGET_FILE="src/freedreno/vulkan/tu_device.cc"
-          if ! grep -q '#include <stdlib.h>' "$TARGET_FILE"; then
-            sed -i '/#include/ a #include <stdlib.h>' "$TARGET_FILE"
-          fi
-          
-          if [ "${{ matrix.target.type }}" = "game" ]; then
-            SHADER_CACHE="${{ env.SHADER_CACHE_GAME }}"
-            FD_PERF_HINT="enable_fast_compute=true,aggressive_tile_cache=true,prefer_sysmem=true"
-          else
-            SHADER_CACHE="${{ env.SHADER_CACHE_GPU }}"
-            FD_PERF_HINT="enable_fast_compute=true"
-          fi
-          
-          ENV_OVERRIDES=$(cat << EOF
-// Auto-generated environment overrides for ${{ matrix.target.target }}
-if (!getenv("FD_DEV_FEATURES")) { 
-    setenv("FD_DEV_FEATURES", "enable_tp_ubwc_flag_hint=1", 1); 
-}
-if (!getenv("MESA_SHADER_CACHE_MAX_SIZE")) { 
-    setenv("MESA_SHADER_CACHE_MAX_SIZE", "$SHADER_CACHE", 1); 
-}
-if (!getenv("TU_DEBUG")) { 
-    setenv("TU_DEBUG", "force_unaligned_device_local,shader_precompile", 1); 
-}
-if (!getenv("FD_PERF_HINT")) { 
-    setenv("FD_PERF_HINT", "$FD_PERF_HINT", 1); 
-}
-EOF
-          )
-          
-          if grep -q '\*pApiVersion = TU_API_VERSION;' "$TARGET_FILE"; then
-            awk -v overrides="$ENV_OVERRIDES" '/\*pApiVersion = TU_API_VERSION;/ {print; print "\n" overrides; next} 1' "$TARGET_FILE" > temp.cc
-            mv temp.cc "$TARGET_FILE"
-          fi
-          
-          curl -L -o prefer_sysmem.patch https://raw.githubusercontent.com/K11MCH1/AdrenoToolsDrivers/main/patches/prefer_sysmem.patch
-          if patch --dry-run -p1 < prefer_sysmem.patch 2>&1 | grep -q "succeeded"; then
-            patch -p1 < prefer_sysmem.patch
+          if [ ! -f "$TARGET_FILE" ]; then
+              echo "ERROR: $TARGET_FILE not found!"
+              exit 1
           fi
 
-      - name: Configure Mesa with Meson
+          # Ensure #include <stdlib.h> is present for setenv
+          if ! grep -q '#include <stdlib.h>' "$TARGET_FILE"; then
+              sed -i '/#include/ a #include <stdlib.h>' "$TARGET_FILE"
+          fi
+
+          # Inject environment overrides after the API version line
+          sed -i '/\*pApiVersion = TU_API_VERSION;/a \
+\
+if (!getenv("FD_DEV_FEATURES")) { setenv("FD_DEV_FEATURES", "enable_tp_ubwc_flag_hint=1", 1); } \
+if (!getenv("MESA_SHADER_CACHE_MAX_SIZE")) { setenv("MESA_SHADER_CACHE_MAX_SIZE", "2048M", 1); } \
+if (!getenv("TU_DEBUG")) { setenv("TU_DEBUG", "force_unaligned_device_local,shader_precompile", 1); } \
+if (!getenv("FD_PERF_HINT")) { setenv("FD_PERF_HINT", "enable_fast_compute=true", 1); }' "$TARGET_FILE"
+
+          # Apply extra patch inline (prefer_sysmem)
+          curl -L -o prefer_sysmem.patch https://raw.githubusercontent.com/K11MCH1/AdrenoToolsDrivers/main/patches/prefer_sysmem.patch
+          git apply prefer_sysmem.patch
+
+      - name: Configure Mesa (Optimized)
         run: |
+          set -e
           cd mesa
-          
           meson setup build-android \
             --cross-file ../android-aarch64 \
-            --prefix / \
             -Dplatforms=android \
-            -Dplatform-sdk-version=${{ env.ANDROID_API }} \
+            -Dplatform-sdk-version=34 \
             -Dandroid-stub=true \
             -Dandroid-libbacktrace=disabled \
             -Dvulkan-drivers=turnip \
@@ -277,274 +105,55 @@ EOF
             -Dgallium-drivers=turnip \
             -Dbuildtype=release \
             -Db_lto=true \
-            -Db_ndebug=true \
             -Dstrip=true \
             -Dglx=disabled \
             -Degl=disabled \
             -Dopengl=false \
-            -Dgles1=disabled \
-            -Dgles2=disabled \
             -Dshader-cache=true \
-            -Dshader-cache-default=true \
             -Dbuild-tests=false \
-            -Dintel-clc=disabled \
-            -Dgallium-opencl=disabled \
-            -Dmicrosoft-clc=disabled \
-            -Dgallium-rusticl=disabled \
-            -Dshared-glapi=enabled \
-            -Dgallium-extra-hud=false \
-            -Dgallium-vdpau=disabled \
-            -Dgallium-omx=disabled \
-            -Dgallium-va=disabled \
-            -Dgallium-xa=disabled \
-            -Dgallium-nine=false \
-            -Dgallium-d3d10umd=false \
-            -Dvulkan-beta=false \
-            -Dtools=[] \
-            -Dvulkan-layers=[] \
-            -Dllvm=disabled \
-            -Dshared-llvm=disabled \
-            -Dvalgrind=disabled \
-            -Dlibunwind=disabled \
-            -Dlmsensors=disabled \
-            -Dpower8=disabled \
-            -Dbuild-32bit=disabled \
-            -Dglvnd=false \
-            -Degl-native-platform=auto \
-            -Dgallium-drivers-hw=true \
-            -Dc_args="${{ steps.configure-flags.outputs.C_FLAGS }}" \
-            -Dc_link_args="${{ steps.configure-flags.outputs.C_FLAGS }}" \
-            -Dcpp_args="${{ steps.configure-flags.outputs.CXX_FLAGS }}" \
-            -Dcpp_link_args="${{ steps.configure-flags.outputs.CXX_FLAGS }}"
+            -Ddebug=false
 
-      - name: Build Turnip
+      - name: Build Turnip (Optimized)
         run: |
+          set -e
           cd mesa
-          
-          CORES=$(nproc)
-          ninja -C build-android -j$CORES
-          
-          if [ -f "build-android/src/freedreno/vulkan/libvulkan_freedreno.so" ]; then
-            SIZE=$(du -h "build-android/src/freedreno/vulkan/libvulkan_freedreno.so" | cut -f1)
-            echo "Built file size: $SIZE"
-          else
-            echo "Error: Output file not found"
-            exit 1
-          fi
+          ninja -C build-android
+          cp build-android/src/freedreno/vulkan/libvulkan_freedreno.so ../vulkan.ad07xx.so
 
-      - name: Prepare files for export
+      - name: Create meta.json with features (Optimized)
         run: |
-          cd mesa
-          
-          cp build-android/src/freedreno/vulkan/libvulkan_freedreno.so ../vulkan.${{ matrix.target.target }}.so
-          
-          # Extract chipset info for metadata
-          CHIPSET="${{ matrix.target.chipset }}"
-          EXPERIMENTAL="${{ matrix.target.experimental || 'false' }}"
-          
-          cat > ../meta.${{ matrix.target.target }}.json << EOF
+          set -e
+          cat > meta.json << EOF
 {
-  "schemaVersion": 2,
-  "name": "Mesa Turnip Driver",
-  "version": "${{ env.MESA_VERSION }}",
-  "vendor": "Mesa3D",
+  "schemaVersion": 1,
+  "name": "Mesa Turnip",
+  "vendor": "Mesa",
   "driver": "turnip",
   "minApi": 29,
-  "targetApi": ${{ env.ANDROID_API }},
-  "libraryName": "vulkan.${{ matrix.target.target }}.so",
-  "buildTarget": "${{ matrix.target.target }}",
-  "buildType": "${{ matrix.target.type }}",
-  "optimization": "${{ matrix.target.optimization }}",
-  "architecture": "${{ matrix.target.arch }}",
-  "chipset": "$CHIPSET",
-  "experimental": $EXPERIMENTAL,
-  "buildDate": "$(date -Iseconds)",
+  "libraryName": "vulkan.ad07xx.so",
   "features": [
-    "Vulkan 1.3 Support",
-    "Turnip Driver Optimized",
-    "Shader Cache Enabled",
-    "Environment Overrides",
-    "LTO Enabled",
-    "Stripped Binary",
-    "Winlator Compatible",
-    "Adreno KGSL Backend"
+    "Environment overrides to enable:",
+    "- UBWC hints (FD_DEV_FEATURES)",
+    "- Large shader cache (MESA_SHADER_CACHE_MAX_SIZE=2048M)",
+    "- Force unaligned device-local memory (TU_DEBUG)",
+    "- Shader precompile enabled",
+    "- Performance hints enabled (FD_PERF_HINT)",
+    "Optimized build flags for Adreno 750 (-O3, -march=armv8.5-a, LTO enabled)",
+    "Full cross-compilation support for Android API level 29",
+    "Packaged output with vulkan.ad07xx.so and metadata",
+    "Ready for Winlator emulator high-performance gaming"
   ]
 }
 EOF
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: mesa-${{ matrix.target.target }}-${{ env.MESA_VERSION }}
-          path: |
-            vulkan.${{ matrix.target.target }}.so
-            meta.${{ matrix.target.target }}.json
-          retention-days: 30
-          if-no-files-found: error
-
-  package:
-    needs: build
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Download all Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          pattern: mesa-*
-          merge-multiple: false
-
-      - name: Create individual packages
+      - name: Package Mesa Turnip
         run: |
-          mkdir -p packages
-          
-          for dir in artifacts/*/; do
-            if [ -d "$dir" ]; then
-              TARGET_NAME=$(basename "$dir" | sed 's/mesa-\(.*\)-'"${{ env.MESA_VERSION }}"'/\1/')
-              
-              if [ -f "$dir/vulkan.$TARGET_NAME.so" ] && [ -f "$dir/meta.$TARGET_NAME.json" ]; then
-                mkdir -p "temp-$TARGET_NAME"
-                cp "$dir/vulkan.$TARGET_NAME.so" "temp-$TARGET_NAME/"
-                cp "$dir/meta.$TARGET_NAME.json" "temp-$TARGET_NAME/"
-                
-                cd "temp-$TARGET_NAME"
-                zip -9 "../packages/mesa-$TARGET_NAME-v${{ env.MESA_VERSION }}-android.zip" *
-                cd ..
-                
-                rm -rf "temp-$TARGET_NAME"
-              fi
-            fi
-          done
+          set -e
+          zip -9 mesa-v25.3.3-android-optimized.zip vulkan.ad07xx.so meta.json
 
-      - name: Create Ultimate Gaming Pack
-        run: |
-          mkdir -p gaming-pack
-          GAME_COUNT=0
-          
-          for dir in artifacts/*/; do
-            if [ -d "$dir" ]; then
-              TARGET_NAME=$(basename "$dir" | sed 's/mesa-\(.*\)-'"${{ env.MESA_VERSION }}"'/\1/')
-              
-              if [[ $TARGET_NAME =~ ^(GhostOfTsushima|ForzaHorizon4|Fifa23|HorizonZeroDawn)$ ]]; then
-                if [ -f "$dir/vulkan.$TARGET_NAME.so" ] && [ -f "$dir/meta.$TARGET_NAME.json" ]; then
-                  cp "$dir/vulkan.$TARGET_NAME.so" "gaming-pack/"
-                  cp "$dir/meta.$TARGET_NAME.json" "gaming-pack/"
-                  GAME_COUNT=$((GAME_COUNT + 1))
-                fi
-              fi
-            fi
-          done
-          
-          if [ $GAME_COUNT -gt 0 ]; then
-            cd gaming-pack
-            zip -9 "../packages/mesa-ULTIMATE-GAMING-PACK-v${{ env.MESA_VERSION }}-android.zip" *
-            cd ..
-          fi
-
-      - name: Create Mega Pack
-        run: |
-          mkdir -p mega-pack/all-files
-          
-          cp -r artifacts/*/* mega-pack/all-files/ 2>/dev/null || true
-          
-          cd mega-pack
-          zip -9 -r "../packages/mesa-MEGA-PACK-ALL-v${{ env.MESA_VERSION }}-android.zip" .
-          cd ..
-
-      - name: Upload packages
-        uses: actions/upload-artifact@v4
-        with:
-          name: mesa-packages-v${{ env.MESA_VERSION }}
-          path: packages/
-          retention-days: 30
-          if-no-files-found: error
-
-  release:
-    needs: package
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - name: Download packages
-        uses: actions/download-artifact@v4
-        with:
-          name: mesa-packages-v${{ env.MESA_VERSION }}
-          path: release-packages
-
-      - name: Create release tag
-        id: tag_version
-        run: |
-          DATE=$(date +%Y%m%d)
-          SHORT_SHA=$(git rev-parse --short HEAD)
-          TAG_NAME="mesa-turnip-v${{ env.MESA_VERSION }}-$DATE-$SHORT_SHA"
-          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
-
-      - name: Create GitHub release
+      - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag_version.outputs.TAG_NAME }}
-          name: "Mesa Turnip Ultimate v${{ env.MESA_VERSION }}"
-          body: |
-            # Mesa Turnip Driver Ultimate Collection v${{ env.MESA_VERSION }}
-            
-            ## Build Information
-            - **Mesa Version**: ${{ env.MESA_VERSION }}
-            - **Build Date**: $(date)
-            - **Android API**: ${{ env.ANDROID_API }}
-            - **Commit**: $(git rev-parse --short HEAD)
-            
-            ## GPU Targets (Corrected):
-            - **Adreno 730**: Snapdragon 8 Gen 1 (armv8.2-a, balanced optimization)
-            - **Adreno 740**: Snapdragon 8+ Gen 1 (armv8.4-a, aggressive optimization)
-            - **Adreno 750**: Snapdragon 8 Gen 3 (armv8.5-a, maximum optimization)
-            - **Adreno 830**: Experimental - Future Snapdragon 8 Elite/Gen 4 (armv9-a, maximum optimization)
-            
-            ## Game Optimized Targets:
-            - Ghost of Tsushima (armv8.5-a, maximum optimization)
-            - Forza Horizon 4 (armv8.5-a, aggressive optimization)
-            - FIFA 23 (armv8.4-a, balanced optimization)
-            - Horizon Zero Dawn (armv8.5-a, maximum optimization)
-            
-            ## Packages Included:
-            1. **Individual Builds** - Separate packages for each target
-            2. **Ultimate Gaming Pack** - All game-optimized drivers in one package
-            3. **Mega Pack** - Complete collection of all builds
-            
-            ## Features:
-            - Vulkan 1.3 Support
-            - Optimized Turnip Driver
-            - Large Shader Cache (2GB for GPU builds, 4GB for game builds)
-            - Environment Overrides Pre-configured
-            - LTO Enabled for Maximum Performance
-            - Stripped Binaries for Reduced Size
-            - Winlator Compatible
-            
-            ## Important Notes:
-            - **Adreno 830 builds are EXPERIMENTAL**: armv9-a support may require newer toolchains
-            - Game builds include aggressive performance tuning for specific titles
-            - GPU builds are optimized for specific Adreno GPU architectures
-            
-            ## Installation:
-            1. Download the package you need
-            2. Extract the .so file
-            3. Place in Vulkan drivers directory on your Android device
-            4. Set appropriate permissions if needed
-            5. Restart your application or emulator
-            
-            ## Environment Variables (Auto-applied):
-            - FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1
-            - TU_DEBUG=force_unaligned_device_local,shader_precompile
-            - MESA_SHADER_CACHE_MAX_SIZE=2GB (GPU) / 4GB (Games)
-            - FD_PERF_HINT=enable_fast_compute=true (additional options for games)
-            
-            ## Disclaimer:
-            Experimental builds (Adreno 830) are provided for testing purposes only.
-            Use at your own risk. Not responsible for any device issues.
-            
-            ## Support:
-            - Report issues via GitHub Issues
-            - Check GitHub Actions logs for build details
-          draft: false
-          prerelease: false
-          files: |
-            release-packages/*.zip
-          generate_release_notes: false
+          tag_name: mesa-25.3.3-optimized-${{ env.MESA_COMMIT }}
+          name: Mesa Turnip v25.3.3 Android Optimized
+          files: mesa-v25.3.3-android-optimized.zip
