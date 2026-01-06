@@ -1,0 +1,12 @@
+[binaries]
+c = 'aarch64-linux-android29-clang'
+cpp = 'aarch64-linux-android29-clang++'
+ar = 'llvm-ar'
+strip = 'llvm-strip'
+pkgconfig = 'pkg-config'
+
+[host_machine]
+system = 'android'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'
