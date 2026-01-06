@@ -54,7 +54,7 @@ jobs:
 
       - name: Clone Mesa 25.3.3
         run: |
-          git clone --depth 1 --branch mesa-25.3.3 https://gitlab.freedesktop.org/mesa/mesa.git mesa
+          git clone --branch mesa-25.3.3 https://gitlab.freedesktop.org/mesa/mesa.git mesa
           cd mesa
           echo "MESA_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
@@ -72,7 +72,7 @@ jobs:
               sed -i '/#include/ a #include <stdlib.h>' "$TARGET_FILE"
           fi
 
-          # Inject environment overrides
+          # Inject environment overrides after the API version line
           sed -i '/instance->api_version = tu_instance_api_version(pCreateInfo);/a \
           \
           if (!getenv("FD_DEV_FEATURES")) { setenv("FD_DEV_FEATURES", "enable_tp_ubwc_flag_hint=1", 1); } \
