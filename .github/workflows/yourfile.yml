@@ -1,4 +1,4 @@
-name: Turnip Builder 07xx - Meson Fix
+name: Turnip Builder 07xx - Glslang Fix
 
 on:
   workflow_dispatch:
@@ -27,17 +27,21 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          # We install python3-pip but NOT the system meson
           sudo apt-get install -y ninja-build python3-pip python3-mako \
             flex bison patchelf curl unzip clang lld llvm pkg-config \
-            glslang-tools libdrm-dev
+            libdrm-dev
 
-      - name: Upgrade Meson (Fix version error)
+      - name: Install Latest Glslang (v15+)
         run: |
-          # Install latest Meson via pip
+          curl -L -o glslang.zip https://github.com/KhronosGroup/glslang/releases/download/main-tot/glslang-main-linux-Release.zip
+          unzip glslang.zip -d glslang_bins
+          chmod +x glslang_bins/bin/glslangValidator
+          echo "$PWD/glslang_bins/bin" >> $GITHUB_PATH
+
+      - name: Upgrade Meson
+        run: |
           pip3 install --upgrade pip
           pip3 install meson
-          # Ensure the pip-installed meson is in the PATH
           echo "/home/runner/.local/bin" >> $GITHUB_PATH
 
       - name: Setup NDK
@@ -54,8 +58,9 @@ jobs:
         run: |
           cd mesa-source
           
-          # Verify meson version
+          # Verify versions
           meson --version
+          glslangValidator --version
           
           cat > android_cross.ini << EOF
           [binaries]
@@ -64,7 +69,8 @@ jobs:
           ar = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
           strip = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
           ld = 'lld'
-          pkgconfig = '/usr/bin/pkg-config'
+          pkg-config = '/usr/bin/pkg-config'
+          
           [host_machine]
           system = 'android'
           cpu_family = 'aarch64'
@@ -88,7 +94,6 @@ jobs:
       - name: Final Rename and Upload
         run: |
           mkdir -p final_zip
-          # Renaming to your specific 07xx format
           cp mesa-source/build-android/src/freedreno/vulkan/libvulkan_freedreno.so final_zip/vulkan.ad07xx.so
           
       - name: Upload Artifact
@@ -96,4 +101,3 @@ jobs:
         with:
           name: Turnip-vulkan.ad07xx
           path: final_zip/vulkan.ad07xx.so
-
