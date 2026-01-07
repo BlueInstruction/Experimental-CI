@@ -94,6 +94,11 @@ jobs:
             -Dfreedreno-kmds=msm,kgsl \
             -Dbuildtype=release \
             -Dopengl=false \
+            -Degl=disabled \
+            -Dgles1=disabled \
+            -Dgles2=disabled \
+            -Dglx=disabled \
+            -Dgbm=disabled \
             -Dgallium-drivers= \
             -Dtools=
             
