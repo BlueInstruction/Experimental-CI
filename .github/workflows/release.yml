@@ -94,6 +94,8 @@ jobs:
             -Dfreedreno-kmds=msm,kgsl \
             -Dbuildtype=release \
             -Dopengl=false \
+            -Dgallium-drivers= \
+            -Dgallium-opencl=disabled \
             -Dgallium-rusticl=false \
             -Dmicrosoft-clc=disabled \
             -Dtools=''
