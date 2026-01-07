@@ -68,14 +68,17 @@ jobs:
           meson --version
           glslangValidator --version
           
-          # Create a fake pkg-config that returns failure for libdrm
+          NDK_SYSROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          
+          # Create pkg-config wrapper for cross-compilation
           mkdir -p $HOME/bin
           cat > $HOME/bin/pkg-config << 'PKGEOF'
           #!/bin/bash
+          # Return failure for libdrm
           if [[ "$@" == *"libdrm"* ]] || [[ "$@" == *"drm"* ]]; then
             exit 1
           fi
-          /usr/bin/pkg-config "$@"
+          exit 1
           PKGEOF
           chmod +x $HOME/bin/pkg-config
           
@@ -95,9 +98,13 @@ jobs:
           endian = 'little'
           
           [properties]
-          sys_root = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot'
+          sys_root = '$NDK_SYSROOT'
           
           [built-in options]
+          c_args = ['-I$NDK_SYSROOT/usr/include']
+          cpp_args = ['-I$NDK_SYSROOT/usr/include']
+          c_link_args = ['-L$NDK_SYSROOT/usr/lib/aarch64-linux-android/34', '-lz']
+          cpp_link_args = ['-L$NDK_SYSROOT/usr/lib/aarch64-linux-android/34', '-lz']
           pkg_config_path = ''
           EOF
           
@@ -118,7 +125,6 @@ jobs:
             -Dgallium-drivers= \
             -Dzstd=disabled \
             -Dshader-cache=disabled \
-            -Dfreedreno-rd=disabled \
             -Dtools=
             
           ninja -C build-android src/freedreno/vulkan/libvulkan_freedreno.so
