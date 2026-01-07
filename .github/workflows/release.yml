@@ -31,7 +31,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build python3-pip python3-mako \
-            flex bison patchelf curl unzip clang lld llvm pkg-config cmake
+            flex bison patchelf curl unzip clang lld llvm cmake
 
       - name: Build Glslang from Source
         run: |
@@ -68,6 +68,17 @@ jobs:
           meson --version
           glslangValidator --version
           
+          # Create a fake pkg-config that returns failure for libdrm
+          mkdir -p $HOME/bin
+          cat > $HOME/bin/pkg-config << 'PKGEOF'
+          #!/bin/bash
+          if [[ "$@" == *"libdrm"* ]] || [[ "$@" == *"drm"* ]]; then
+            exit 1
+          fi
+          /usr/bin/pkg-config "$@"
+          PKGEOF
+          chmod +x $HOME/bin/pkg-config
+          
           cat > android_cross.ini << EOF
           [binaries]
           c = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang'
@@ -75,7 +86,7 @@ jobs:
           ar = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
           strip = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
           ld = 'lld'
-          pkg-config = '/usr/bin/pkg-config'
+          pkg-config = '$HOME/bin/pkg-config'
           
           [host_machine]
           system = 'android'
@@ -85,6 +96,9 @@ jobs:
           
           [properties]
           sys_root = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot'
+          
+          [built-in options]
+          pkg_config_path = ''
           EOF
           
           meson setup build-android \
@@ -105,7 +119,6 @@ jobs:
             -Dzstd=disabled \
             -Dzlib=disabled \
             -Dshader-cache=disabled \
-            -Dlibdrm=disabled \
             -Dtools=
             
           ninja -C build-android src/freedreno/vulkan/libvulkan_freedreno.so
