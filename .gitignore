@@ -1,5 +1,38 @@
-build_output/
-mesa/
-*.zip
+# Build outputs
+build/
+build-android/
+mesa-source/
+
+# NDK
+android-ndk-*/
+ndk.zip
+
+# Glslang
+glslang/
+glslang_bins/
+glslang_install/
+glslang.zip
+
+# Release artifacts
+release_assets/
+final_zip/
 *.so
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Logs
+*.log
