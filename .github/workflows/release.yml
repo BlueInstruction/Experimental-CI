@@ -32,7 +32,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build python3-pip python3-mako \
             flex bison patchelf curl unzip clang lld llvm pkg-config \
-            libdrm-dev glslang-tools glslang-dev
+            libdrm-dev cmake
+
+      - name: Build Glslang from Source
+        run: |
+          git clone --depth 1 --branch 14.3.0 https://github.com/KhronosGroup/glslang.git
+          cd glslang
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/glslang_install
+          cmake --build build -j$(nproc)
+          cmake --install build
+          echo "$HOME/glslang_install/bin" >> $GITHUB_PATH
 
       - name: Upgrade Meson
         run: |
