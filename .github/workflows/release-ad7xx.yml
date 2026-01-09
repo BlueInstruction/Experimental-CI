@@ -248,9 +248,6 @@ jobs:
           @@ -100,6 +100,30 @@ tu_physical_device_init(struct tu_physical_device *device)
           +   /* Adreno 7xx Enhanced GPU Detection */
           +   switch (device->dev_id.gpu_id) {
-          +   case 702:
-          +      device->info.a7xx.type = A7XX_A702;
-          +      break;
           +   case 710:
           +      device->info.a7xx.type = A7XX_A710;
           +      break;
@@ -262,6 +259,9 @@ jobs:
           +      break;
           +   case 730:
           +      device->info.a7xx.type = A7XX_A730;
+          +      break;
+          +   case 735:
+          +      device->info.a7xx.type = A7XX_A735;
           +      break;
           +   case 740:
           +      device->info.a7xx.type = A7XX_A740;
@@ -357,7 +357,7 @@ jobs:
           +         image->ubwc_size = ALIGN(image->ubwc_size, 4096);
           +         
           +         /* Enable TP UBWC hint for better performance */
-          +         if (device->physical_device->info.a7xx.type >= A7XX_A730) {
+          +         if (device->physical_device->info.a7xx.type >= A7XX_A735) {
           +            image->ubwc_flags |= TU_UBWC_TP_HINT;
           +         }
           +      }
@@ -839,11 +839,11 @@ jobs:
             ### 📱 Supported GPUs
             | GPU | SoC | Status |
             |-----|-----|--------|
-            | Adreno 702 | Snapdragon 6 Gen 1 | ✅ |
-            | Adreno 710 | Snapdragon 7 Gen 1 | ✅ |
-            | Adreno 720 | Snapdragon 7+ Gen 2 | ✅ |
-            | Adreno 725 | Snapdragon 7s Gen 3 | ✅ |
+            | Adreno 710 | Snapdragon 6 Gen 1 | ✅ |
+            | Adreno 720 | Snapdragon 7 Gen 3 | ✅ |
+            | Adreno 725 | Snapdragon 7+ Gen 2 | ✅ |
             | Adreno 730 | Snapdragon 8 Gen 1 | ✅ |
+            | Adreno 735 | Snapdragon 8s Gen 3 | ✅ |
             | Adreno 740 | Snapdragon 8 Gen 2 | ✅ |
             | Adreno 750 | Snapdragon 8 Gen 3 | ✅ |
             
@@ -865,7 +865,7 @@ jobs:
             | Variant | File | Use Case |
             |---------|------|----------|
             | Regular | `...devel.zip` | Default balanced |
-            | GMEM | `..._Gmem.zip` | ⭐ Best for Winlator |
+            | GMEM | `..._Gmem.zip` | ⭐ Best for a710.a720 |
             | Sysmem | `..._Sysmem.zip` | Compatibility |
             | Autotuner | `..._Autotuner.zip` | Auto selection |
             
@@ -898,7 +898,7 @@ jobs:
             ┌─────────────────────────────────────────┐
             │         Which variant to use?           │
             ├─────────────────────────────────────────┤
-            │ Winlator gaming ────► Gmem ⭐           │
+            │ For a710.a720 ────► Gmem ⭐           │
             │ Best stability ─────► Gmem_NoLRZ ⭐     │
             │ Maximum FPS ────────► Performance_Extreme│
             │ Game crashes ───────► Compatibility     │
