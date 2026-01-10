@@ -1,4 +1,4 @@
-name: Build Turnip Gen8 - Adreno 8xx (SD 8 Elite)
+name: Build Turnip Gen8 - Adreno 8xx
 
 on:
   workflow_dispatch:
@@ -499,7 +499,7 @@ jobs:
             -Dfreedreno-kmds=kgsl \
             -Dbuildtype=release \
             -Dstrip=true \
-            -Dgallium-drivers= \
+            -Dgallium-drivers=freedreno \
             -Dopengl=false \
             -Degl=disabled \
             -Dshader-cache=disabled \
@@ -518,8 +518,8 @@ jobs:
       - name: Package
         if: steps.check.outputs.run == 'true'
         run: |
-          mkdir -p release/out/lib64
-          cp mesa/build/src/freedreno/vulkan/libvulkan_freedreno.so release/out/lib64/vulkan.adreno8xx.so
+          mkdir -p release/out
+          cp mesa/build/src/freedreno/vulkan/libvulkan_freedreno.so release/out/vulkan.ad08xx.so
           
           cd mesa
           ACTUAL_COMMIT=$(git rev-parse --short HEAD)
@@ -536,13 +536,12 @@ jobs:
             "vendor": "Mesa",
             "driverVersion": "${{ env.MESA_VERSION }}/vk${{ needs.get-mesa-info.outputs.vulkan_version }}",
             "minApi": ${{ env.API_LEVEL }},
-            "libraryName": "vulkan.adreno8xx.so",
+            "libraryName": "vulkan.ad08xx.so",
             "commit": "$ACTUAL_COMMIT",
             "commitDate": "$COMMIT_DATE",
             "tuDebug": "${{ matrix.tu_debug }}",
-            "targetGPU": "Adreno 8xx (825/830/840)",
+            "targetGPU": "Adreno 8xx",
             "perfLevel": "${{ matrix.perf_level }}",
-            "warning": "EXPERIMENTAL - Do NOT use with Eden emulator"
           }
           EOF
           
