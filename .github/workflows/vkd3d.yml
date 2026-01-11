@@ -30,7 +30,7 @@ jobs:
 
   build-vkd3d:
     needs: get-vkd3d-info
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     outputs:
       build_date: ${{ steps.set-date.outputs.build_date }}
     steps:
@@ -51,8 +51,11 @@ jobs:
           sudo apt-get install -y \
             gcc-mingw-w64 g++-mingw-w64 \
             mingw-w64-tools \
-            meson ninja-build glslang-tools \
-            curl unzip zip git ccache
+            ninja-build glslang-tools \
+            curl unzip zip git ccache \
+            python3-pip
+          
+          pip install meson
 
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
