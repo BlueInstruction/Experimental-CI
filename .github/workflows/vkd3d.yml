@@ -1,85 +1,84 @@
-name: Build VKD3D-Proton for Winlator
+name: VKD3D
 
 on:
+  schedule:
+    - cron: "0 21 * * *"
   workflow_dispatch:
+    inputs:
+      FORCE_MODE:
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
-  build-vkd3d:
-    runs-on: ubuntu-24.04
+  core_build:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
     steps:
-      - name: Clone, Build and Package
-        uses: Joshua-Ashton/arch-mingw-github-action@v8
-        with:
-          command: |
-            sudo pacman -S --noconfirm zip
-            
-            LATEST_TAG=$(curl -s https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
-            
-            git clone --recursive --branch "$LATEST_TAG" https://github.com/HansKristian-Work/vkd3d-proton.git
-            cd vkd3d-proton
-            
-            # Build without strip for full size
-            ./package-release.sh "$LATEST_TAG" build --no-package --dev-build
-            
-            VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
-            SHA=$(git rev-parse --short HEAD)
-            BUILD_DIR=$(find build -maxdepth 1 -type d -name "vkd3d-proton-*" | head -1)
-            VERSION_CODE=$((RANDOM % 3))
-            
-            mkdir -p /tmp/pkg/system32
-            mkdir -p /tmp/pkg/syswow64
-            
-            cp "$BUILD_DIR/x64/"*.dll /tmp/pkg/system32/
-            cp "$BUILD_DIR/x86/"*.dll /tmp/pkg/syswow64/
-            
-            cat > /tmp/pkg/profile.json << EOF
-            {
-              "type": "VKD3D",
-              "versionName": "${VERSION}-${SHA}",
-              "versionCode": ${VERSION_CODE},
-              "description": "vkd3d-proton",
-              "files": [
-                {
-                  "source": "system32/d3d12.dll",
-                  "target": "\${system32}/d3d12.dll"
-                },
-                {
-                  "source": "system32/d3d12core.dll",
-                  "target": "\${system32}/d3d12core.dll"
-                },
-                {
-                  "source": "syswow64/d3d12.dll",
-                  "target": "\${syswow64}/d3d12.dll"
-                },
-                {
-                  "source": "syswow64/d3d12core.dll",
-                  "target": "\${syswow64}/d3d12core.dll"
-                }
-              ]
-            }
-            EOF
-            
-            cd /tmp/pkg
-            zip -r "/github/workspace/vkd3d-proton-${VERSION}-${SHA}.wcp" .
-            
-            echo "VERSION=${VERSION}" >> /github/workspace/build.env
-            echo "SHA=${SHA}" >> /github/workspace/build.env
-
-      - name: Load build info
+      - name: SYNC_DEPS
         run: |
-          cat build.env >> $GITHUB_ENV
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm git meson ninja mingw-w64-gcc lib32-mingw-w64-gcc zip curl jq
 
-      - name: Create Release
+      - name: FETCH_TAG
+        id: info
+        run: |
+          LATEST_TAG=$(curl -s https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest | jq -r .tag_name)
+          echo "TAG=$LATEST_TAG" >> $GITHUB_ENV
+          echo "VER=${LATEST_TAG#v}" >> $GITHUB_ENV
+
+      - name: CHECK_EXISTENCE
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXISTS=$(gh release view "build-${{ env.VER }}" --repo ${{ github.repository }} > /dev/null 2>&1 && echo "true" || echo "false")
+          if [[ "${{ github.event.inputs.FORCE_MODE }}" == "true" ]]; then EXISTS="false"; fi
+          echo "SKIP_RUN=$EXISTS" >> $GITHUB_OUTPUT
+
+      - name: COMPILE_SRC
+        if: steps.check.outputs.SKIP_RUN == 'false'
+        run: |
+          git clone --recursive --branch ${{ env.TAG }} https://github.com/HansKristian-Work/vkd3d-proton.git src
+          cd src
+          ./package-release.sh ${{ env.TAG }} ../out --no-package
+
+      - name: PREP_WCP_ROOT
+        if: steps.check.outputs.SKIP_RUN == 'false'
+        run: |
+          mkdir -p staging/system32 staging/syswow64
+          SRC_PATH=$(find out -maxdepth 1 -type d -name "vkd3d-proton-*")
+          cp "$SRC_PATH/x64/"*.dll staging/system32/
+          cp "$SRC_PATH/x86/"*.dll staging/syswow64/
+          
+          cat > staging/profile.json << EOF
+          {
+            "type": "VKD3D",
+            "versionName": "${{ env.VER }}",
+            "versionCode": $(date +%s),
+            "description": "VKD3D-Proton ${{ env.VER }}",
+            "files": [
+              {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
+              {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
+              {"source": "syswow64/d3d12.dll", "target": "\${syswow64}/d3d12.dll"},
+              {"source": "syswow64/d3d12core.dll", "target": "\${syswow64}/d3d12core.dll"}
+            ]
+          }
+          EOF
+
+      - name: PACK_WCP
+        if: steps.check.outputs.SKIP_RUN == 'false'
+        run: |
+          cd staging && zip -r "../vkd3d-proton-${{ env.VER }}.wcp" ./*
+
+      - name: DEPLOY_RELEASE
+        if: steps.check.outputs.SKIP_RUN == 'false'
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: vkd3d-${{ env.VERSION }}-${{ github.run_number }}
-          name: VKD3D-Proton ${{ env.VERSION }}
+          tag_name: build-${{ env.VER }}
+          name: VKD3D-Proton ${{ env.VER }}
           files: "*.wcp"
-          body: |
-            VKD3D-Proton build for Winlator
-            Version: ${{ env.VERSION }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
