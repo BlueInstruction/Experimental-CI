@@ -1,4 +1,4 @@
-name: Build VKD3D-Proton
+name: Build VKD3D-Proton for Winlator
 
 on:
   workflow_dispatch:
@@ -7,45 +7,16 @@ permissions:
   contents: write
 
 jobs:
-  get-vkd3d-info:
+  build-vkd3d:
     runs-on: ubuntu-24.04
-    outputs:
-      version: ${{ steps.info.outputs.version }}
-      commit_sha: ${{ steps.info.outputs.sha }}
-      commit_date: ${{ steps.info.outputs.date }}
     steps:
-      - name: Get VKD3D-Proton Info
-        id: info
+      - name: Get Latest Version Info
+        id: version
         run: |
           LATEST_TAG=$(curl -s https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
-          
-          git clone --depth 1 --branch "$LATEST_TAG" https://github.com/HansKristian-Work/vkd3d-proton.git
-          cd vkd3d-proton
-          
-          VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
-          SHA=$(git rev-parse --short HEAD)
-          DATE=$(git log -1 --format=%cd --date=short)
-          
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "sha=$SHA" >> $GITHUB_OUTPUT
-          echo "date=$DATE" >> $GITHUB_OUTPUT
           echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
 
-  build-vkd3d:
-    needs: get-vkd3d-info
-    runs-on: ubuntu-24.04
-    outputs:
-      build_date: ${{ steps.set-date.outputs.build_date }}
-      archive_name: ${{ steps.package.outputs.archive_name }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set Build Date
-        id: set-date
-        run: echo "build_date=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
-
-      - name: Build Release
+      - name: Clone and Build
         uses: Joshua-Ashton/arch-mingw-github-action@v8
         with:
           command: |
@@ -54,17 +25,9 @@ jobs:
             git clone --recursive --branch "$LATEST_TAG" https://github.com/HansKristian-Work/vkd3d-proton.git
             cd vkd3d-proton
             
-            VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
-            SHA=$(git rev-parse --short HEAD)
-            
             ./package-release.sh "$LATEST_TAG" build --no-package
-            
-            echo "VERSION=$VERSION" >> $GITHUB_ENV
-            echo "SHA=$SHA" >> $GITHUB_ENV
-            echo "TAG=$LATEST_TAG" >> $GITHUB_ENV
 
       - name: Package for Winlator
-        id: package
         run: |
           cd vkd3d-proton
           
@@ -80,7 +43,7 @@ jobs:
           cp "$BUILD_DIR/x64/"*.dll winlator_package/system32/
           cp "$BUILD_DIR/x86/"*.dll winlator_package/syswow64/
           
-          VERSION_CODE="$((RANDOM % 3))"
+          VERSION_CODE=$((RANDOM % 3))
           
           cat > winlator_package/profile.json << EOF
           {
@@ -112,50 +75,14 @@ jobs:
           ARCHIVE_NAME="vkd3d-proton-${VERSION}-${SHA}.wcp"
           
           cd winlator_package
-          zip -9 -r "../../$ARCHIVE_NAME" .
+          zip -r "../$ARCHIVE_NAME" .
           
-          echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
+          echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vkd3d-proton-${{ needs.get-vkd3d-info.outputs.version }}
-          path: "*.wcp"
+          name: vkd3d-proton-winlator
+          path: vkd3d-proton/*.wcp
           if-no-files-found: error
-          retention-days: 5
-
-  release:
-    needs: [get-vkd3d-info, build-vkd3d]
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Download Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: vkd3d-proton-${{ needs.get-vkd3d-info.outputs.version }}
-          path: dist
-
-      - name: Generate Checksum
-        run: |
-          cd dist
-          sha256sum *.wcp > SHA256SUMS.txt
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: vkd3d-${{ needs.get-vkd3d-info.outputs.version }}-${{ github.run_id }}
-          name: "VKD3D-Proton ${{ needs.get-vkd3d-info.outputs.version }}"
-          body: |
-            ## Build Info
-            | Info | Value |
-            |------|-------|
-            | Version | ${{ needs.get-vkd3d-info.outputs.version }} |
-            | Commit | `${{ needs.get-vkd3d-info.outputs.commit_sha }}` |
-            | Commit Date | ${{ needs.get-vkd3d-info.outputs.commit_date }} |
-            | Build Date | ${{ needs.build-vkd3d.outputs.build_date }} |
-            
-          files: |
-            dist/*.wcp
-            dist/SHA256SUMS.txt
-          prerelease: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
