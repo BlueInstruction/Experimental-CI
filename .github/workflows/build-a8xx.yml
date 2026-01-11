@@ -10,7 +10,7 @@ env:
   MESA_VERSION: "26.0.0"
   BUILD_TAG: "devel-a8xx"
   NDK_VERSION: "r29"
-  API_LEVEL: "34"
+  API_LEVEL: "35"
 
 jobs:
   get-mesa-info:
@@ -197,7 +197,7 @@ jobs:
             "vendor": "Mesa",
             "driverVersion": "Vulkan ${{ needs.get-mesa-info.outputs.vulkan_version }}",
             "minApi": ${{ env.API_LEVEL }},
-            "libraryName": "vulkan.ad8xx.so",
+            "libraryName": "vulkan.ad8xx.so"
           }
           EOF
           
