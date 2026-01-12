@@ -124,7 +124,25 @@ jobs:
           BRANCH="${{ needs.get-mesa-info.outputs.branch }}"
           git clone --depth=1 --branch "$BRANCH" \
             https://gitlab.freedesktop.org/mesa/mesa.git
-
+            
+      - name: Apply Custom Patches
+        run: |
+          cd mesa
+          
+          if [ -d "${{ github.workspace }}/patches" ]; then
+            for patch in ${{ github.workspace }}/patches/*.patch; do
+              if [ -f "$patch" ]; then
+                echo "Applying patch: $(basename $patch)"
+                git apply "$patch" --verbose || {
+                  echo "Warning: Patch $(basename $patch) failed, trying with 3-way merge..."
+                  git apply "$patch" --3way || echo "Patch $(basename $patch) could not be applied"
+                }
+              fi
+            done
+          fi
+          
+          echo "=== Patches Applied ==="
+          
       - name: Configure Meson
         run: |
           cd mesa
