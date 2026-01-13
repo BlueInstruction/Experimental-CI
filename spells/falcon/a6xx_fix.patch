@@ -1,0 +1,8 @@
+diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
+--- a/src/freedreno/vulkan/tu_device.cc
++++ b/src/freedreno/vulkan/tu_device.cc
+@@ -100,7 +100,7 @@ tu_physical_device_init(struct tu_physical_device *device)
+ {
+-   physical_device->has_cached_coherent_memory = true;
++   physical_device->has_cached_coherent_memory = false;
+ }
