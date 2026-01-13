@@ -131,136 +131,16 @@ jobs:
       - name: Apply VKD3D Extension Patches
         run: |
           cd mesa
-          
-          if [ -f "src/freedreno/vulkan/tu_device.cc" ]; then
-            sed -i 's/descriptorBindingPartiallyBound = false/descriptorBindingPartiallyBound = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/descriptorBindingVariableDescriptorCount = false/descriptorBindingVariableDescriptorCount = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/runtimeDescriptorArray = false/runtimeDescriptorArray = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderSampledImageArrayNonUniformIndexing = false/shaderSampledImageArrayNonUniformIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderStorageBufferArrayNonUniformIndexing = false/shaderStorageBufferArrayNonUniformIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderStorageImageArrayNonUniformIndexing = false/shaderStorageImageArrayNonUniformIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderUniformBufferArrayNonUniformIndexing = false/shaderUniformBufferArrayNonUniformIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/timelineSemaphore = false/timelineSemaphore = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/bufferDeviceAddress = false/bufferDeviceAddress = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/bufferDeviceAddressCaptureReplay = false/bufferDeviceAddressCaptureReplay = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/synchronization2 = false/synchronization2 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/dynamicRendering = false/dynamicRendering = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/maintenance4 = false/maintenance4 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/maintenance5 = false/maintenance5 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/maintenance6 = false/maintenance6 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/extendedDynamicState = false/extendedDynamicState = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/extendedDynamicState2 = false/extendedDynamicState2 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/extendedDynamicState3 = false/extendedDynamicState3 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderInt8 = false/shaderInt8 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderInt16 = false/shaderInt16 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderInt64 = false/shaderInt64 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderFloat16 = false/shaderFloat16 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderFloat64 = false/shaderFloat64 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/storageBuffer8BitAccess = false/storageBuffer8BitAccess = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/uniformAndStorageBuffer8BitAccess = false/uniformAndStorageBuffer8BitAccess = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/storagePushConstant8 = false/storagePushConstant8 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/storageBuffer16BitAccess = false/storageBuffer16BitAccess = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/uniformAndStorageBuffer16BitAccess = false/uniformAndStorageBuffer16BitAccess = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/storagePushConstant16 = false/storagePushConstant16 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/storageInputOutput16 = false/storageInputOutput16 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderStorageImageMultisample = false/shaderStorageImageMultisample = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderStorageImageReadWithoutFormat = false/shaderStorageImageReadWithoutFormat = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderStorageImageWriteWithoutFormat = false/shaderStorageImageWriteWithoutFormat = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderUniformTexelBufferArrayDynamicIndexing = false/shaderUniformTexelBufferArrayDynamicIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderStorageTexelBufferArrayDynamicIndexing = false/shaderStorageTexelBufferArrayDynamicIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderUniformTexelBufferArrayNonUniformIndexing = false/shaderUniformTexelBufferArrayNonUniformIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderStorageTexelBufferArrayNonUniformIndexing = false/shaderStorageTexelBufferArrayNonUniformIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/descriptorBindingUniformBufferUpdateAfterBind = false/descriptorBindingUniformBufferUpdateAfterBind = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/descriptorBindingSampledImageUpdateAfterBind = false/descriptorBindingSampledImageUpdateAfterBind = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/descriptorBindingStorageImageUpdateAfterBind = false/descriptorBindingStorageImageUpdateAfterBind = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/descriptorBindingStorageBufferUpdateAfterBind = false/descriptorBindingStorageBufferUpdateAfterBind = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/descriptorBindingUniformTexelBufferUpdateAfterBind = false/descriptorBindingUniformTexelBufferUpdateAfterBind = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/descriptorBindingStorageTexelBufferUpdateAfterBind = false/descriptorBindingStorageTexelBufferUpdateAfterBind = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/descriptorBindingUpdateUnusedWhilePending = false/descriptorBindingUpdateUnusedWhilePending = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/scalarBlockLayout = false/scalarBlockLayout = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/uniformBufferStandardLayout = false/uniformBufferStandardLayout = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderSubgroupExtendedTypes = false/shaderSubgroupExtendedTypes = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/separateDepthStencilLayouts = false/separateDepthStencilLayouts = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/hostQueryReset = false/hostQueryReset = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/imagelessFramebuffer = false/imagelessFramebuffer = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/vulkanMemoryModel = false/vulkanMemoryModel = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/vulkanMemoryModelDeviceScope = false/vulkanMemoryModelDeviceScope = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/vulkanMemoryModelAvailabilityVisibilityChains = false/vulkanMemoryModelAvailabilityVisibilityChains = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderOutputViewportIndex = false/shaderOutputViewportIndex = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderOutputLayer = false/shaderOutputLayer = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/subgroupBroadcastDynamicId = false/subgroupBroadcastDynamicId = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderDemoteToHelperInvocation = false/shaderDemoteToHelperInvocation = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderTerminateInvocation = false/shaderTerminateInvocation = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/subgroupSizeControl = false/subgroupSizeControl = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/computeFullSubgroups = false/computeFullSubgroups = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderZeroInitializeWorkgroupMemory = false/shaderZeroInitializeWorkgroupMemory = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderIntegerDotProduct = false/shaderIntegerDotProduct = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/privateData = false/privateData = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/pipelineCreationCacheControl = false/pipelineCreationCacheControl = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/robustImageAccess = false/robustImageAccess = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/nullDescriptor = false/nullDescriptor = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/primitiveTopologyListRestart = false/primitiveTopologyListRestart = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/primitiveTopologyPatchListRestart = false/primitiveTopologyPatchListRestart = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/vertexAttributeInstanceRateDivisor = false/vertexAttributeInstanceRateDivisor = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/vertexAttributeInstanceRateZeroDivisor = false/vertexAttributeInstanceRateZeroDivisor = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/indexTypeUint8 = false/indexTypeUint8 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/fragmentShaderSampleInterlock = false/fragmentShaderSampleInterlock = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/fragmentShaderPixelInterlock = false/fragmentShaderPixelInterlock = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/fragmentShaderShadingRateInterlock = false/fragmentShaderShadingRateInterlock = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/pipelineRobustness = false/pipelineRobustness = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/formatA4R4G4B4 = false/formatA4R4G4B4 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/formatA4B4G4R4 = false/formatA4B4G4R4 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/ycbcr2plane444Formats = false/ycbcr2plane444Formats = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/textureCompressionASTC_HDR = false/textureCompressionASTC_HDR = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/globalPriorityQuery = false/globalPriorityQuery = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/rectangularLines = false/rectangularLines = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/bresenhamLines = false/bresenhamLines = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/smoothLines = false/smoothLines = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/stippledRectangularLines = false/stippledRectangularLines = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/stippledBresenhamLines = false/stippledBresenhamLines = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/stippledSmoothLines = false/stippledSmoothLines = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/conditionalRendering = false/conditionalRendering = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/inheritedConditionalRendering = false/inheritedConditionalRendering = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/transformFeedback = false/transformFeedback = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/geometryStreams = false/geometryStreams = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/depthClipEnable = false/depthClipEnable = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/depthClipControl = false/depthClipControl = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/negativeOneToOne = false/negativeOneToOne = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/multiDraw = false/multiDraw = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/drawIndirectCount = false/drawIndirectCount = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderDrawParameters = false/shaderDrawParameters = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/samplerFilterMinmax = false/samplerFilterMinmax = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/samplerMirrorClampToEdge = false/samplerMirrorClampToEdge = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/samplerYcbcrConversion = false/samplerYcbcrConversion = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/descriptorIndexing = false/descriptorIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderInputAttachmentArrayDynamicIndexing = false/shaderInputAttachmentArrayDynamicIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderInputAttachmentArrayNonUniformIndexing = false/shaderInputAttachmentArrayNonUniformIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/robustBufferAccess2 = false/robustBufferAccess2 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/robustImageAccess2 = false/robustImageAccess2 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/image2DViewOf3D = false/image2DViewOf3D = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/sampler2DViewOf3D = false/sampler2DViewOf3D = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/attachmentFeedbackLoopLayout = false/attachmentFeedbackLoopLayout = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/mutableDescriptorType = false/mutableDescriptorType = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/fragmentDensityMap = false/fragmentDensityMap = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/fragmentDensityMapDynamic = false/fragmentDensityMapDynamic = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/fragmentDensityMapNonSubsampledImages = false/fragmentDensityMapNonSubsampledImages = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/graphicsPipelineLibrary = false/graphicsPipelineLibrary = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/shaderEarlyAndLateFragmentTests = false/shaderEarlyAndLateFragmentTests = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/nonSeamlessCubeMap = false/nonSeamlessCubeMap = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/fragmentShadingRateEnums = false/fragmentShadingRateEnums = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/supersampleFragmentShadingRates = false/supersampleFragmentShadingRates = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/noInvocationFragmentShadingRates = false/noInvocationFragmentShadingRates = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/pipelineFragmentShadingRate = false/pipelineFragmentShadingRate = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/primitiveFragmentShadingRate = false/primitiveFragmentShadingRate = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-            sed -i 's/attachmentFragmentShadingRate = false/attachmentFragmentShadingRate = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
-          fi
-          
           if [ -d "${{ github.workspace }}/patches" ]; then
             for patch in ${{ github.workspace }}/patches/*.patch; do
               if [ -f "$patch" ]; then
                 git apply "$patch" --verbose 2>/dev/null || git apply "$patch" --3way 2>/dev/null || true
               fi
             done
+          fi
+          
+          if [ -f "src/freedreno/vulkan/tu_device.cc" ]; then
+            sed -i 's/= false/= true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
           fi
 
       - name: Configure Meson
