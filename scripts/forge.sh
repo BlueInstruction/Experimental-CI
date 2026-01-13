@@ -202,7 +202,7 @@ spell_tiger_velocity() {
         return 0
     fi
     
-    # Apply patch
+    # Apply spell
     if grep -q "use_sysmem_rendering" "$file"; then
         sed -i '/^use_sysmem_rendering/,/^{/{/^{/a\   // Dragon: Tiger Velocity\n   return true;
         }' "$file" 2>/dev/null || \
@@ -342,7 +342,7 @@ run_ninja_build() {
     
     log "Building with Ninja (${cores} cores)..."
     
-    if ! ninja -C build-dragon -j"$cores" &> "$log_file"; then
+    if ! ninja -C build-dragon -j"$cores" src/freedreno/vulkan/libvulkan_freedreno.so &> "$log_file"; then
         echo ""
         warn "Build failed. Last 50 lines:"
         tail -50 "$log_file"
