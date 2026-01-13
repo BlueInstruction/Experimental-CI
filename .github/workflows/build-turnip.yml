@@ -148,10 +148,11 @@ jobs:
           
           echo "=== Applying sed modifications ==="
           if [ -f "src/freedreno/vulkan/tu_device.cc" ]; then
-            BEFORE=$(grep -c "= false" src/freedreno/vulkan/tu_device.cc || echo "0")
+            BEFORE=$(grep -c "= false" src/freedreno/vulkan/tu_device.cc 2>/dev/null || echo 0)
             sed -i 's/= false/= true/g' src/freedreno/vulkan/tu_device.cc
-            AFTER=$(grep -c "= false" src/freedreno/vulkan/tu_device.cc || echo "0")
-            echo "✓ Changed $((BEFORE - AFTER)) instances from 'false' to 'true'"
+            AFTER=$(grep -c "= false" src/freedreno/vulkan/tu_device.cc 2>/dev/null || echo 0)
+            CHANGED=$((BEFORE - AFTER))
+            echo "✓ Changed ${CHANGED} instances from 'false' to 'true'"
           else
             echo "✗ tu_device.cc not found"
           fi
