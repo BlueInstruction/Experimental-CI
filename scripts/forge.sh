@@ -173,7 +173,6 @@ EOF
         -Dllvm=disabled \
         -Dlibunwind=disabled \
         -Dzstd=disabled \
-        -Dlibarchive=disabled \
         &> "$CHAMBER/meson_${variant_name}.log" || { cat "$CHAMBER/meson_${variant_name}.log"; error "Meson failed"; }
 
     log "Building with ninja..."
