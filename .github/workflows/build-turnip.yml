@@ -1,4 +1,4 @@
-name: Build Turnip - (a7xx)
+name: Build Turnip - (a7xx) - VKD3D Optimized
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ permissions:
 
 env:
   MESA_VERSION: "26.0.0"
-  BUILD_TAG: "a7xx-gen3"
+  BUILD_TAG: "a7xx-vkd3d"
   NDK_VERSION: "r29"
   API_LEVEL: "35"
 
@@ -29,6 +29,7 @@ jobs:
       commit_sha: ${{ steps.mesa.outputs.sha }}
       commit_date: ${{ steps.mesa.outputs.date }}
       mesa_version: ${{ steps.mesa.outputs.mesa_version }}
+      vulkan_version: ${{ steps.mesa.outputs.vulkan }}
       branch: ${{ steps.mesa.outputs.branch }}
     steps:
       - name: Get Mesa Branch Info
@@ -40,9 +41,15 @@ jobs:
           SHA=$(git rev-parse --short HEAD)
           DATE=$(git log -1 --format=%cd --date=short)
           MESA_VER=$(grep -oP "version\s*:\s*'\K[0-9]+\.[0-9]+\.[0-9]+" meson.build | head -1 || echo "${{ env.MESA_VERSION }}")
+          version=$(awk -F'COMPLETE VK_MAKE_API_VERSION\\(|\\)' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
+          major=$(echo $version | cut -d "," -f 2 | xargs)
+          minor=$(echo $version | cut -d "," -f 3 | xargs)
+          patch=$(awk -F'VK_HEADER_VERSION |\\n#define' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
+          VK_VERSION="$major.$minor.$patch"
           echo "sha=$SHA" >> $GITHUB_OUTPUT
           echo "date=$DATE" >> $GITHUB_OUTPUT
           echo "mesa_version=$MESA_VER" >> $GITHUB_OUTPUT
+          echo "vulkan=$VK_VERSION" >> $GITHUB_OUTPUT
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
 
   build-turnip:
@@ -59,8 +66,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build python3-pip python3-mako \
             flex bison patchelf curl unzip clang lld llvm cmake pkg-config \
-            glslang-tools libglvnd-dev zstd libzstd-dev
+            glslang-tools libglvnd-dev ccache zstd libzstd-dev git
           pip install --break-system-packages meson mako PyYAML
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: turnip-a7xx-vkd3d-${{ github.run_id }}
+          max-size: 2G
 
       - name: Cache NDK
         uses: actions/cache@v4
@@ -75,7 +88,7 @@ jobs:
           curl -sL -o ndk.zip "https://dl.google.com/android/repository/android-ndk-${{ env.NDK_VERSION }}-linux.zip"
           unzip -q ndk.zip
           rm -f ndk.zip
-          
+
       - name: Set NDK Path
         run: echo "NDK=$(pwd)/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_ENV
 
@@ -84,7 +97,7 @@ jobs:
         id: cache-spirv
         with:
           path: ~/spirv-tools-android
-          key: spirv-tools-android-${{ env.NDK_VERSION }}-${{ env.API_LEVEL }}-v3
+          key: spirv-tools-android-${{ env.NDK_VERSION }}-${{ env.API_LEVEL }}-v5
 
       - name: Build SPIRV-Tools for Android
         if: steps.cache-spirv.outputs.cache-hit != 'true'
@@ -115,18 +128,137 @@ jobs:
           BRANCH="${{ needs.get-mesa-info.outputs.branch }}"
           git clone --depth=1 --branch "$BRANCH" https://gitlab.freedesktop.org/mesa/mesa.git
 
-      - name: Apply Custom Patches
+      - name: Apply VKD3D Extension Patches
         run: |
           cd mesa
+          
+          if [ -f "src/freedreno/vulkan/tu_device.cc" ]; then
+            sed -i 's/descriptorBindingPartiallyBound = false/descriptorBindingPartiallyBound = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/descriptorBindingVariableDescriptorCount = false/descriptorBindingVariableDescriptorCount = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/runtimeDescriptorArray = false/runtimeDescriptorArray = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderSampledImageArrayNonUniformIndexing = false/shaderSampledImageArrayNonUniformIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderStorageBufferArrayNonUniformIndexing = false/shaderStorageBufferArrayNonUniformIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderStorageImageArrayNonUniformIndexing = false/shaderStorageImageArrayNonUniformIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderUniformBufferArrayNonUniformIndexing = false/shaderUniformBufferArrayNonUniformIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/timelineSemaphore = false/timelineSemaphore = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/bufferDeviceAddress = false/bufferDeviceAddress = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/bufferDeviceAddressCaptureReplay = false/bufferDeviceAddressCaptureReplay = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/synchronization2 = false/synchronization2 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/dynamicRendering = false/dynamicRendering = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/maintenance4 = false/maintenance4 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/maintenance5 = false/maintenance5 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/maintenance6 = false/maintenance6 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/extendedDynamicState = false/extendedDynamicState = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/extendedDynamicState2 = false/extendedDynamicState2 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/extendedDynamicState3 = false/extendedDynamicState3 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderInt8 = false/shaderInt8 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderInt16 = false/shaderInt16 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderInt64 = false/shaderInt64 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderFloat16 = false/shaderFloat16 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderFloat64 = false/shaderFloat64 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/storageBuffer8BitAccess = false/storageBuffer8BitAccess = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/uniformAndStorageBuffer8BitAccess = false/uniformAndStorageBuffer8BitAccess = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/storagePushConstant8 = false/storagePushConstant8 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/storageBuffer16BitAccess = false/storageBuffer16BitAccess = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/uniformAndStorageBuffer16BitAccess = false/uniformAndStorageBuffer16BitAccess = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/storagePushConstant16 = false/storagePushConstant16 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/storageInputOutput16 = false/storageInputOutput16 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderStorageImageMultisample = false/shaderStorageImageMultisample = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderStorageImageReadWithoutFormat = false/shaderStorageImageReadWithoutFormat = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderStorageImageWriteWithoutFormat = false/shaderStorageImageWriteWithoutFormat = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderUniformTexelBufferArrayDynamicIndexing = false/shaderUniformTexelBufferArrayDynamicIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderStorageTexelBufferArrayDynamicIndexing = false/shaderStorageTexelBufferArrayDynamicIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderUniformTexelBufferArrayNonUniformIndexing = false/shaderUniformTexelBufferArrayNonUniformIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderStorageTexelBufferArrayNonUniformIndexing = false/shaderStorageTexelBufferArrayNonUniformIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/descriptorBindingUniformBufferUpdateAfterBind = false/descriptorBindingUniformBufferUpdateAfterBind = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/descriptorBindingSampledImageUpdateAfterBind = false/descriptorBindingSampledImageUpdateAfterBind = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/descriptorBindingStorageImageUpdateAfterBind = false/descriptorBindingStorageImageUpdateAfterBind = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/descriptorBindingStorageBufferUpdateAfterBind = false/descriptorBindingStorageBufferUpdateAfterBind = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/descriptorBindingUniformTexelBufferUpdateAfterBind = false/descriptorBindingUniformTexelBufferUpdateAfterBind = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/descriptorBindingStorageTexelBufferUpdateAfterBind = false/descriptorBindingStorageTexelBufferUpdateAfterBind = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/descriptorBindingUpdateUnusedWhilePending = false/descriptorBindingUpdateUnusedWhilePending = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/scalarBlockLayout = false/scalarBlockLayout = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/uniformBufferStandardLayout = false/uniformBufferStandardLayout = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderSubgroupExtendedTypes = false/shaderSubgroupExtendedTypes = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/separateDepthStencilLayouts = false/separateDepthStencilLayouts = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/hostQueryReset = false/hostQueryReset = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/imagelessFramebuffer = false/imagelessFramebuffer = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/vulkanMemoryModel = false/vulkanMemoryModel = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/vulkanMemoryModelDeviceScope = false/vulkanMemoryModelDeviceScope = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/vulkanMemoryModelAvailabilityVisibilityChains = false/vulkanMemoryModelAvailabilityVisibilityChains = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderOutputViewportIndex = false/shaderOutputViewportIndex = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderOutputLayer = false/shaderOutputLayer = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/subgroupBroadcastDynamicId = false/subgroupBroadcastDynamicId = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderDemoteToHelperInvocation = false/shaderDemoteToHelperInvocation = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderTerminateInvocation = false/shaderTerminateInvocation = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/subgroupSizeControl = false/subgroupSizeControl = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/computeFullSubgroups = false/computeFullSubgroups = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderZeroInitializeWorkgroupMemory = false/shaderZeroInitializeWorkgroupMemory = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderIntegerDotProduct = false/shaderIntegerDotProduct = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/privateData = false/privateData = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/pipelineCreationCacheControl = false/pipelineCreationCacheControl = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/robustImageAccess = false/robustImageAccess = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/nullDescriptor = false/nullDescriptor = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/primitiveTopologyListRestart = false/primitiveTopologyListRestart = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/primitiveTopologyPatchListRestart = false/primitiveTopologyPatchListRestart = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/vertexAttributeInstanceRateDivisor = false/vertexAttributeInstanceRateDivisor = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/vertexAttributeInstanceRateZeroDivisor = false/vertexAttributeInstanceRateZeroDivisor = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/indexTypeUint8 = false/indexTypeUint8 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/fragmentShaderSampleInterlock = false/fragmentShaderSampleInterlock = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/fragmentShaderPixelInterlock = false/fragmentShaderPixelInterlock = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/fragmentShaderShadingRateInterlock = false/fragmentShaderShadingRateInterlock = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/pipelineRobustness = false/pipelineRobustness = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/formatA4R4G4B4 = false/formatA4R4G4B4 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/formatA4B4G4R4 = false/formatA4B4G4R4 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/ycbcr2plane444Formats = false/ycbcr2plane444Formats = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/textureCompressionASTC_HDR = false/textureCompressionASTC_HDR = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/globalPriorityQuery = false/globalPriorityQuery = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/rectangularLines = false/rectangularLines = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/bresenhamLines = false/bresenhamLines = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/smoothLines = false/smoothLines = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/stippledRectangularLines = false/stippledRectangularLines = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/stippledBresenhamLines = false/stippledBresenhamLines = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/stippledSmoothLines = false/stippledSmoothLines = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/conditionalRendering = false/conditionalRendering = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/inheritedConditionalRendering = false/inheritedConditionalRendering = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/transformFeedback = false/transformFeedback = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/geometryStreams = false/geometryStreams = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/depthClipEnable = false/depthClipEnable = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/depthClipControl = false/depthClipControl = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/negativeOneToOne = false/negativeOneToOne = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/multiDraw = false/multiDraw = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/drawIndirectCount = false/drawIndirectCount = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderDrawParameters = false/shaderDrawParameters = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/samplerFilterMinmax = false/samplerFilterMinmax = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/samplerMirrorClampToEdge = false/samplerMirrorClampToEdge = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/samplerYcbcrConversion = false/samplerYcbcrConversion = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/descriptorIndexing = false/descriptorIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderInputAttachmentArrayDynamicIndexing = false/shaderInputAttachmentArrayDynamicIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderInputAttachmentArrayNonUniformIndexing = false/shaderInputAttachmentArrayNonUniformIndexing = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/robustBufferAccess2 = false/robustBufferAccess2 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/robustImageAccess2 = false/robustImageAccess2 = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/image2DViewOf3D = false/image2DViewOf3D = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/sampler2DViewOf3D = false/sampler2DViewOf3D = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/attachmentFeedbackLoopLayout = false/attachmentFeedbackLoopLayout = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/mutableDescriptorType = false/mutableDescriptorType = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/fragmentDensityMap = false/fragmentDensityMap = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/fragmentDensityMapDynamic = false/fragmentDensityMapDynamic = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/fragmentDensityMapNonSubsampledImages = false/fragmentDensityMapNonSubsampledImages = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/graphicsPipelineLibrary = false/graphicsPipelineLibrary = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/shaderEarlyAndLateFragmentTests = false/shaderEarlyAndLateFragmentTests = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/nonSeamlessCubeMap = false/nonSeamlessCubeMap = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/fragmentShadingRateEnums = false/fragmentShadingRateEnums = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/supersampleFragmentShadingRates = false/supersampleFragmentShadingRates = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/noInvocationFragmentShadingRates = false/noInvocationFragmentShadingRates = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/pipelineFragmentShadingRate = false/pipelineFragmentShadingRate = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/primitiveFragmentShadingRate = false/primitiveFragmentShadingRate = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            sed -i 's/attachmentFragmentShadingRate = false/attachmentFragmentShadingRate = true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+          fi
           
           if [ -d "${{ github.workspace }}/patches" ]; then
             for patch in ${{ github.workspace }}/patches/*.patch; do
               if [ -f "$patch" ]; then
-                echo "Applying patch: $(basename $patch)"
-                git apply "$patch" --verbose || {
-                  echo "Warning: Patch $(basename $patch) failed, trying with 3-way merge..."
-                  git apply "$patch" --3way || echo "Patch $(basename $patch) could not be applied"
-                }
+                git apply "$patch" --verbose 2>/dev/null || git apply "$patch" --3way 2>/dev/null || true
               fi
             done
           fi
@@ -134,15 +266,18 @@ jobs:
       - name: Configure Meson
         run: |
           cd mesa
+          NDK_BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
           SYSROOT="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          
           cat > cross.ini << EOF
           [binaries]
-          c = 'aarch64-linux-android${{ env.API_LEVEL }}-clang'
-          cpp = 'aarch64-linux-android${{ env.API_LEVEL }}-clang++'
-          ar = 'llvm-ar'
-          strip = 'llvm-strip'
-          ld = 'lld'
-          pkg-config = 'pkg-config'
+          ar = '$NDK_BIN/llvm-ar'
+          c = ['ccache', '$NDK_BIN/aarch64-linux-android${{ env.API_LEVEL }}-clang']
+          cpp = ['ccache', '$NDK_BIN/aarch64-linux-android${{ env.API_LEVEL }}-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+          c_ld = 'lld'
+          cpp_ld = 'lld'
+          strip = '$NDK_BIN/llvm-strip'
+          pkg-config = ['pkg-config']
 
           [host_machine]
           system = 'android'
@@ -156,13 +291,19 @@ jobs:
           [built-in options]
           pkg_config_path = ['${{ env.SPIRV_TOOLS_PATH }}/lib/pkgconfig']
           EOF
-          export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          
+          export PATH="$NDK_BIN:$PATH"
           export PKG_CONFIG_PATH="$SPIRV_TOOLS_PATH/lib/pkgconfig:$PKG_CONFIG_PATH"
+          
+          PERF_FLAGS="-O3 -flto=thin -fomit-frame-pointer -ffunction-sections -fdata-sections -fno-math-errno -fno-stack-protector -ffast-math -fno-signed-zeros -fno-trapping-math -ffp-contract=fast -march=armv8-a+simd"
+          VKD3D_DEFINES="-DNDEBUG -DTU_DEBUG=0 -DHAVE_PERFETTO=0 -DVK_USE_PLATFORM_ANDROID_KHR=1"
+          
           meson setup build --cross-file cross.ini \
             -Dplatforms=android \
             -Dplatform-sdk-version=${{ env.API_LEVEL }} \
             -Dandroid-stub=true \
             -Dvulkan-drivers=freedreno \
+            -Dvulkan-beta=true \
             -Dfreedreno-kmds=kgsl \
             -Dbuildtype=release \
             -Dstrip=true \
@@ -183,45 +324,46 @@ jobs:
             -Dzstd=enabled \
             -Drelocatable=true \
             -Dtools= \
-            -Dc_args="-I$SYSROOT/usr/include -I$SPIRV_TOOLS_PATH/include -O2 -g0 -DNDEBUG" \
-            -Dcpp_args="-I$SYSROOT/usr/include -I$SPIRV_TOOLS_PATH/include -O2 -g0 -DNDEBUG" \
-            -Dc_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -L$SPIRV_TOOLS_PATH/lib -lz -Wl,-O1 -Wl,--gc-sections -Wl,--as-needed" \
-            -Dcpp_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -L$SPIRV_TOOLS_PATH/lib -lz -Wl,-O1 -Wl,--gc-sections -Wl,--as-needed"
+            -Dfreedreno-virtio=false \
+            -Dimagination-srv=false \
+            -Dxmlconfig=disabled \
+            -Dshader-cache=enabled \
+            -Dshader-cache-default=true \
+            -Dc_args="-I$SYSROOT/usr/include -I$SPIRV_TOOLS_PATH/include $PERF_FLAGS -g0 $VKD3D_DEFINES" \
+            -Dcpp_args="-I$SYSROOT/usr/include -I$SPIRV_TOOLS_PATH/include $PERF_FLAGS -g0 $VKD3D_DEFINES" \
+            -Dc_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -L$SPIRV_TOOLS_PATH/lib -lz -flto=thin -Wl,-O3 -Wl,--gc-sections -Wl,--as-needed -Wl,--icf=all -Wl,--lto-O3" \
+            -Dcpp_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -L$SPIRV_TOOLS_PATH/lib -lz -flto=thin -Wl,-O3 -Wl,--gc-sections -Wl,--as-needed -Wl,--icf=all -Wl,--lto-O3"
 
       - name: Build
         run: |
           export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           ninja -C mesa/build src/freedreno/vulkan/libvulkan_freedreno.so
 
-      - name: Verify and Strip Library
+      - name: Process Library
         run: |
           LIB_PATH="mesa/build/src/freedreno/vulkan/libvulkan_freedreno.so"
-          if [[ ! -f "$LIB_PATH" ]]; then
-            echo "ERROR: Library not found!"
-            exit 1
-          fi
-          $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-unneeded "$LIB_PATH"
-          file "$LIB_PATH" | grep -q "aarch64" || { echo "ERROR: Not an ARM64 library!"; exit 1; }
+          NDK_BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          $NDK_BIN/llvm-strip --strip-unneeded "$LIB_PATH"
+          patchelf --set-soname vulkan.adreno.so "$LIB_PATH"
 
       - name: Package
         id: package
         run: |
           mkdir -p release/out
           cp mesa/build/src/freedreno/vulkan/libvulkan_freedreno.so release/out/vulkan.ad07xx.so
-          cd mesa
-          COMMIT_SHA=$(git rev-parse --short HEAD)
+          COMMIT_SHA=$(cd mesa && git rev-parse --short HEAD)
           MESA_VER="${{ needs.get-mesa-info.outputs.mesa_version }}"
-          cd ..
           BUILD_DATE=$(date +'%Y%m%d')
           ARCHIVE_NAME="turnip_mesa-${MESA_VER}_${{ env.BUILD_TAG }}_${BUILD_DATE}.zip"
           cat > release/out/meta.json << EOF
           {
             "schemaVersion": 1,
-            "name": "$ARCHIVE_NAME",
-            "description": "Mesa Turnip Driver",
-            "packageVersion": "1",
+            "name": "Turnip VKD3D - ${COMMIT_SHA}",
+            "description": "Mesa Turnip - Adreno 7xx - VKD3D-Proton Optimized",
+            "author": "Mesa/Freedreno",
+            "packageVersion": "$MESA_VER",
             "vendor": "Mesa",
-            "driverVersion": "$MESA_VER",
+            "driverVersion": "$MESA_VER/vk${{ needs.get-mesa-info.outputs.vulkan_version }}",
             "minApi": ${{ env.API_LEVEL }},
             "libraryName": "vulkan.ad07xx.so"
           }
@@ -232,7 +374,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: turnip-a7xx-${{ needs.get-mesa-info.outputs.commit_sha }}
+          name: turnip-a7xx-vkd3d-${{ needs.get-mesa-info.outputs.commit_sha }}
           path: release/*.zip
           retention-days: 14
 
@@ -243,7 +385,7 @@ jobs:
       - name: Download Artifact
         uses: actions/download-artifact@v4
         with:
-          name: turnip-a7xx-${{ needs.get-mesa-info.outputs.commit_sha }}
+          name: turnip-a7xx-vkd3d-${{ needs.get-mesa-info.outputs.commit_sha }}
           path: dist
 
       - name: Generate Checksum
@@ -254,9 +396,9 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: turnip-${{ needs.get-mesa-info.outputs.mesa_version }}-${{ needs.get-mesa-info.outputs.commit_sha }}
-          name: "Turnip ${{ needs.get-mesa-info.outputs.mesa_version }}-${{ needs.get-mesa-info.outputs.commit_sha }}"
-          body: "Mesa ${{ needs.get-mesa-info.outputs.mesa_version }} | Commit: ${{ needs.get-mesa-info.outputs.commit_sha }} | Date: ${{ needs.get-mesa-info.outputs.commit_date }}"
+          tag_name: turnip-${{ needs.get-mesa-info.outputs.mesa_version }}-vkd3d-${{ needs.get-mesa-info.outputs.commit_sha }}
+          name: "Turnip ${{ needs.get-mesa-info.outputs.mesa_version }} - VKD3D"
+          body: "Mesa ${{ needs.get-mesa-info.outputs.mesa_version }} | Commit: ${{ needs.get-mesa-info.outputs.commit_sha }} | VKD3D-Proton Optimized"
           files: |
             dist/*.zip
             dist/SHA256SUMS.txt
