@@ -1,5 +1,5 @@
 # Build outputs
-forge_chamber/
+driver_chamber/
 *.zip
 *.so
 *.log
