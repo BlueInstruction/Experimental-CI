@@ -1,4 +1,6 @@
-# 🐉 Dragon Forge
+# 🐉 Dragon Driver
+
+Mesa Turnip patch framework for Android with multiple build variants.
 
 ## Variants
 
@@ -6,26 +8,16 @@
 |---------|------|-------------|
 | Tiger | `tiger` | Base stable with velocity |
 | Tiger-Phoenix | `tiger-phoenix` | Tiger + enhanced wings |
-| Falcon | `falcon` | Legacy device support |
-| Shadow | `shadow` | Experimental features |
-| Hawk | `hawk` | Maximum power |
+| Falcon | `falcon` | Legacy device support (A6xx) |
+| Shadow | `shadow` | Experimental features / autotune |
+| Hawk | `hawk` | Maximum power / full patch set |
 
 ## Usage
 
-### GitHub Actions
-1. Go to **Actions** tab
-2. Select **Dragon Forge**
-3. Click **Run workflow**
-4. Choose variant
-
 ### Local Build
 ```bash
-# Single variant
-./scripts/forge.sh tiger
+# Build a single variant
+bash scripts/build_mesa_android.sh tiger
 
-# All variants
-./scripts/forge.sh all
-
-# Custom commit
-./scripts/forge.sh tiger abc123f
-
+# Build all variants
+bash scripts/build_mesa_android.sh all
