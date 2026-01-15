@@ -1,6 +1,6 @@
 #!/bin/bash -e
 # ╔═══════════════════════════════════════════════════════════════╗
-# ║                  🐉 DRAGON FORGE v3.0 🐉                      ║
+# ║                  🐉 DRAGON DRIVER v3.0 🐉                      ║
 # ║              Professional Build System                        ║
 # ╚═══════════════════════════════════════════════════════════════╝
 # === COLORS ===
@@ -12,7 +12,7 @@ MAGENTA='\033[0;35m'
 NC='\033[0m'
 
 # === CONFIG ===
-CHAMBER="$(pwd)/forge_chamber"
+CHAMBER="$(pwd)/driver_chamber"
 SPELLS_DIR="$(pwd)/spells"
 CORE_VER="${CORE_VER:-android-ndk-r29}"
 LEVEL="${LEVEL:-35}"
@@ -71,7 +71,7 @@ check_dependencies() {
 
 # === PREPARE CHAMBER ===
 prepare_chamber() {
-    log "Preparing forge chamber..."
+    log "Preparing driver chamber..."
     mkdir -p "$CHAMBER"
     cd "$CHAMBER"
 
@@ -133,8 +133,8 @@ clone_mesa() {
 
 setup_mesa_repo() {
     cd "$CHAMBER/mesa"
-    git config user.name "DragonForge"
-    git config user.email "forge@dragon.local"
+    git config user.name "DragonDriver"
+    git config user.email "driver@dragon.local"
     
     # Custom commit checkout
     if [ -n "$CUSTOM_COMMIT" ]; then
@@ -202,7 +202,7 @@ spell_tiger_velocity() {
         return 0
     fi
     
-    # Apply spells
+    # Apply spell
     if grep -q "use_sysmem_rendering" "$file"; then
         sed -i '/^use_sysmem_rendering/,/^{/{/^{/a\   // Dragon: Tiger Velocity\n   return true;
         }' "$file" 2>/dev/null || \
@@ -232,13 +232,13 @@ spell_falcon_memory() {
     [ $changes -gt 0 ] && success "Falcon Memory applied ($changes files)" || warn "No changes made"
 }
 
-# === FORGE (BUILD) ===
-forge_dragon() {
+# === DRIVER (BUILD) ===
+driver_dragon() {
     local variant_name="$1"
     
     echo ""
     log "╔═══════════════════════════════════════╗"
-    log "║  Forging: $variant_name"
+    log "║  Drivers: $variant_name"
     log "╚═══════════════════════════════════════╝"
     
     cd "$CHAMBER/mesa"
@@ -377,7 +377,7 @@ package_build() {
     "schemaVersion": 1,
     "name": "Dragon ${variant_name}",
     "description": "Mesa ${DRAGON_VER} - ${variant_name} variant - Built: ${DATE}",
-    "author": "DragonForge",
+    "author": "DragonDriver",
     "packageVersion": "1",
     "vendor": "Mesa",
     "driverVersion": "${DRAGON_VER}",
@@ -408,7 +408,7 @@ build_tiger() {
     log "=== TIGER BUILD ==="
     reset_mesa
     spell_tiger_velocity
-    forge_dragon "Tiger"
+    driver_dragon "Tiger"
 }
 
 build_tiger_phoenix() {
@@ -416,7 +416,7 @@ build_tiger_phoenix() {
     reset_mesa
     spell_tiger_velocity
     apply_spell_file "phoenix/wings_boost"
-    forge_dragon "Tiger-Phoenix"
+    driver_dragon "Tiger-Phoenix"
 }
 
 build_falcon() {
@@ -424,14 +424,14 @@ build_falcon() {
     reset_mesa
     spell_falcon_memory
     spell_tiger_velocity
-    forge_dragon "Falcon"
+    driver_dragon "Falcon"
 }
 
 build_shadow() {
     log "=== SHADOW BUILD ==="
     reset_mesa
     apply_merge_request "37802"
-    forge_dragon "Shadow"
+    driver_dragon "Shadow"
 }
 
 build_hawk() {
@@ -441,7 +441,7 @@ build_hawk() {
     spell_falcon_memory
     apply_spell_file "phoenix/wings_boost"
     apply_spell_file "common/memory_fix"
-    forge_dragon "Hawk"
+    driver_dragon "Hawk"
 }
 
 build_all() {
@@ -468,7 +468,7 @@ build_all() {
 main() {
     echo ""
     echo "╔═══════════════════════════════════════════════════════════════╗"
-    echo "║                  🐉 DRAGON FORGE v3.0 🐉                      ║"
+    echo "║                  🐉 DRAGON DRIVER v3.0 🐉                      ║"
     echo "║              Professional Build System                        ║"
     echo "╚═══════════════════════════════════════════════════════════════╝"
     echo ""
@@ -501,7 +501,7 @@ main() {
     # Final summary
     echo ""
     success "╔═══════════════════════════════════════╗"
-    success "║     🐉 Dragon Forge Complete! 🐉      ║"
+    success "║     🐉 Dragon Driver Complete! 🐉  ║"
     success "╚═══════════════════════════════════════╝"
     echo ""
     
