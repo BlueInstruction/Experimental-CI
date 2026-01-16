@@ -424,10 +424,11 @@ build_falcon() {
     reset_mesa
     spell_falcon_memory
     spell_tiger_velocity
+    apply_spell_file "falcon/a6xx_fix"
+    apply_spell_file "falcon/a750_cse_fix"
     apply_spell_file "falcon/lrz_fix"
-    apply_spell_file "falcon/vb_fix"
-    apply_spell_file "falcon/device_opt"
-    apply_spell_file "falcon/a750_cse"
+    apply_spell_file "falcon/adreno750_dx12"
+    apply_spell_file "falcon/vertex_buffer_fix"
     driver_dragon "Falcon"
 }
 
