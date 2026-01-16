@@ -29,7 +29,7 @@ env:
   LEVEL: "35"
 
 jobs:
-  forge:
+  build_driver:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
