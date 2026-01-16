@@ -424,7 +424,7 @@ build_falcon() {
     reset_mesa
     spell_falcon_memory
     apply_spell_file "falcon/a6xx_fix"
-    apply_spell_file "falcon/fix_vb_size"
+    apply_spell_file "falcon/vertex_buffer_fix.patch"
     spell_tiger_velocity
     apply_spell_file "falcon/a7xx_cse_fix"
     apply_spell_file "falcon/adreno750_dx12"
