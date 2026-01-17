@@ -3,16 +3,34 @@ driver_chamber/
 *.zip
 *.so
 *.log
+*.wcp
 
 # IDE
 .vscode/
 .idea/
 *.swp
+*.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Temp
 *.tmp
 *.bak
+*.orig
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# NDK
+android-ndk-*/
+core.zip
+
+# Mesa build
+mesa/build*/
+mesa/builddir/
