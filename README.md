@@ -1,33 +1,16 @@
-# DragonDriver
+# DragonDriver – Experimental Repository
 
-**Important Notice:**  
-This project is **purely experimental** and was created **for personal learning and understanding how drivers work and experimenting with Vulkan and Direct3D12**.  
-It is **not recommended for any practical or production use**.
+Welcome to **DragonDriver**!  
 
----
+This repository is purely **experimental**. The content here represents my personal learning and testing of CI pipelines, driver modifications, and shader patches. It is **not intended for production use**, and I do **not recommend using it as a base for real projects**.  
 
-## What is this project?
-- A **personal experimental lab** for Adreno and Mesa/Turnip drivers.  
-- Testing different configurations of **VKD3D-Proton**.  
-- Exploring **CI workflows** and automated build systems.  
-- Learning how patches are applied and how driver files can be modified.
+This work helped me understand:  
+- VKD3D-Proton modifications for UE5 games.  
+- Turnip/Freedreno driver CI builds.  
+- Shader model adjustments and experimental patches.  
 
----
-
-## What you should know
-- The project is **unstable**.  
-- It does **not represent any official product** of Mesa, Turnip, or VKD3D-Proton.  
-- Any bugs or unexpected behavior are **part of the learning process**.
-
----
-
-## Links to professional projects
-For reference or high-performance builds, check out:  
+If you are looking for high-performance, professionally maintained drivers, check out these repositories:  
 - [AdrenoToolsDrivers](https://github.com/K11MCH1/AdrenoToolsDrivers)  
-- [freedreno_turnip-CI](https://github.com/StevenMXZ/freedreno_turnip-CI)
+- [freedreno_turnip-CI](https://github.com/StevenMXZ/freedreno_turnip-CI)  
 
----
-
-## Thanks & Inspiration
-- Full credit to the community and original developers of Mesa, Freedreno, Turnip, and VKD3D-Proton.  
-- This project is a **starting point for personal experimentation and understanding**.
+Thank you for visiting! This repository is just a **sandbox** for learning and experimentation.  
