@@ -1,11 +1,9 @@
-# DragonDriver Experimental Repository
+# 🐉 DragonDriver Experimental Repository
 
 This repository is purely **experimental**. The content here represents my personal learning and testing of CI pipelines, driver modifications, and shader patches. It is **not intended for production use**, and I do **not recommend using it as a base for real projects**.  
 
-This work helped me understand:  
-- VKD3D-Proton modifications for UE5 games.  
-- Turnip/Freedreno driver CI builds.  
-- Shader model adjustments and experimental patches.  
+This work helped me understand:   
+- Turnip/Freedreno driver CI builds.
 
 If you are looking for high-performance, professionally maintained drivers, check out these repositories:  
 - [AdrenoToolsDrivers](https://github.com/K11MCH1/AdrenoToolsDrivers)  
