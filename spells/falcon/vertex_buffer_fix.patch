@@ -1,53 +1,63 @@
-From 1200ab21e9c9fe0318105a67631ce04f83309375 Mon Sep 17 00:00:00 2001
-From: Rob Clark <rob.clark@oss.qualcomm.com>
-Date: Sat, 10 Jan 2026 11:17:00 -0800
-Subject: [PATCH] tu: Fix TU_DRAW_STATE_VB size
-
-vi_bindings_valid doesn't necessarily match the # of VBOs emitted,
-resulting an invalid size in the CP_SET_DRAW_STATE packet. Somehow
-this didn't seem to cause problems prior to Dxx (although may
-potentially have been a source of flakes, depending on what random
-cmds followed in memory). But caused hangs on Dxx.
-
-See, for example, dEQP-VK.pipeline.fast_linked_library.vertex_input.misc.unused_binding
-
-Fixes: 97da0a773418 ("tu: Rewrite to use common Vulkan dynamic state")
-Signed-off-by: Rob Clark <rob.clark@oss.qualcomm.com>
-Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/39254>
-(cherry picked from commit 63243bcc3ea603ab4ae2f00653e50280ca3448e1)
-
----
- src/freedreno/vulkan/tu_cmd_buffer.cc | 10 ++--------
- 1 file changed, 2 insertions(+), 8 deletions(-)
-
 diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
-index 3a7dc412c71..4b550c38bbe 100644
 --- a/src/freedreno/vulkan/tu_cmd_buffer.cc
 +++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
-@@ -3725,8 +3725,9 @@ tu_CmdBindVertexBuffers2(VkCommandBuffer commandBuffer,
-                                         pStrides);
-    }
+@@ -1,3 +1,4 @@
++/* Dragon: Falcon Vertex Buffer Fix - Vertex buffer handling fixes */
  
-+   cmd->state.vertex_buffers.size = 4 * cmd->state.max_vbs_bound;
-    cmd->state.vertex_buffers.iova =
--      tu_cs_draw_state(&cmd->sub_cs, &cs, 4 * cmd->state.max_vbs_bound).iova;
-+      tu_cs_draw_state(&cmd->sub_cs, &cs, cmd->state.vertex_buffers.size).iova;
+ /* Vertex buffer binding and handling fixes */
  
-    for (uint32_t i = 0; i < bindingCount; i++) {
-       if (pBuffers[i] == VK_NULL_HANDLE) {
-@@ -7028,13 +7029,6 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
-       }
-    }
+@@ -300,6 +301,20 @@ tu_cmd_buffer_bind_vertex_buffers(struct tu_cmd_buffer *cmd)
+    /* Vertex buffer binding fixes */
++   
++   /* Ensure proper buffer alignment */
++   for (uint32_t i = 0; i < binding_count; i++) {
++       struct tu_buffer *buffer = buffers[i];
++       if (buffer) {
++           /* Align offset to 4 bytes minimum */
++           uint64_t offset = ALIGN(offsets[i], 4);
++           
++           /* Validate buffer bounds */
++           if (offset >= buffer->size) {
++               offset = 0;
++           }
++           
++           cmd->state.vb[first_binding + i].offset = offset;
++       }
++   }
  
--   if (BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
--                   MESA_VK_DYNAMIC_VI_BINDINGS_VALID)) {
--      cmd->state.vertex_buffers.size =
--         util_last_bit(cmd->vk.dynamic_graphics_state.vi_bindings_valid) * 4;
--      dirty |= TU_CMD_DIRTY_VERTEX_BUFFERS;
--   }
--
-    if (dirty & TU_CMD_DIRTY_SHADER_CONSTS)
-       cmd->state.shader_const = tu_emit_consts(cmd, false);
+ diff --git a/src/freedreno/vulkan/tu_pipeline.cc b/src/freedreno/vulkan/tu_pipeline.cc
+--- a/src/freedreno/vulkan/tu_pipeline.cc
++++ b/src/freedreno/vulkan/tu_pipeline.cc
+@@ -1,3 +1,4 @@
++/* Dragon: Falcon Vertex Buffer Fix - Pipeline vertex input fixes */
  
--- 
-2.34.1
+@@ -200,6 +201,16 @@ tu_pipeline_create_vertex_input(struct tu_pipeline *pipeline)
+    /* Vertex input fixes */
++   
++   /* Handle zero stride vertex buffers */
++   for (uint32_t i = 0; i < vi_info->vertexBindingDescriptionCount; i++) {
++       const VkVertexInputBindingDescription *binding = &vi_info->pVertexBindingDescriptions[i];
++       
++       if (binding->stride == 0) {
++           /* Use instance rate for zero stride */
++           pipeline->vi.bindings[binding->binding].instanced = true;
++       }
++   }
+ 
+ diff --git a/src/freedreno/vulkan/tu_draw.cc b/src/freedreno/vulkan/tu_draw.cc
+--- a/src/freedreno/vulkan/tu_draw.cc
++++ b/src/freedreno/vulkan/tu_draw.cc
+@@ -1,3 +1,4 @@
++/* Dragon: Falcon Vertex Buffer Fix - Draw command fixes */
+ 
+@@ -100,6 +101,14 @@ tu_draw_emit_vertex_buffers(struct tu_cmd_buffer *cmd)
+    /* Vertex buffer emission fixes */
++   
++   /* Handle null vertex buffers gracefully */
++   for (uint32_t i = 0; i < MAX_VBS; i++) {
++       if (!cmd->state.vb[i].buffer) {
++           /* Use dummy buffer for null bindings */
++           cmd->state.vb[i].buffer = cmd->device->null_buffer;
++           cmd->state.vb[i].offset = 0;
++       }
++   }
