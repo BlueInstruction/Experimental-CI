@@ -276,13 +276,6 @@ jobs:
             - Date: ${{ env.BUILD_DATE }}
             - Size: ${{ env.PKG_SIZE }}
             
-            **Files:**
-            - d3d12.dll (x64/x86)
-            - d3d12core.dll (x64/x86)
-            
-            Optimized for compatibility with various systems.
-            See checksums.txt for file verification.
-            
             Source: https://github.com/HansKristian-Work/vkd3d-proton
           draft: false
           prerelease: false
