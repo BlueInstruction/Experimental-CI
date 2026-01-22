@@ -273,7 +273,6 @@ jobs:
             - Version: ${{ env.VER }}
             - Commit: ${{ env.COMMIT }}
             - Date: ${{ env.BUILD_DATE }}
-            - Optimizations: AVX, AVX2, FMA, SSE4.2, -O3
             
             Source: https://github.com/HansKristian-Work/vkd3d-proton
           draft: false
