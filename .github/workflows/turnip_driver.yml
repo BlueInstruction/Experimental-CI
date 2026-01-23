@@ -1,4 +1,4 @@
-name: Turnip Driver Build
+name: Turnip Driver
 
 on:
   workflow_dispatch:
@@ -8,13 +8,13 @@ on:
       # description: "Select build variant"
       # default: "gen8"
       # options:
-      #    - gen8
-      #    - gen8-phoenix
-      #    - gen7
-      #    - shadow
+      #   - gen8
+      #   - gen8-phoenix
+      #   - gen7
+      #   - shadow
       #   - hawk
-      #    - dx12-heavy
-      #    - all
+      #   - dx12-heavy
+      #   - all
       custom_commit:
         description: "Custom Mesa commit (optional)"
         required: false
@@ -72,12 +72,12 @@ jobs:
         run: |
           chmod +x scripts/build.sh
           export MESA_REPO_SOURCE="${{ github.event.inputs.mesa_repo_source || 'freedesktop' }}"
-          bash scripts/build.sh "\( {{ github.event.inputs.build_variant || 'gen8' }}" " \){{ github.event.inputs.custom_commit }}"
+          bash scripts/build.sh "${{ github.event.inputs.build_variant || 'gen8' }}" "${{ github.event.inputs.custom_commit }}"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: turnip-\( {{ github.event.inputs.build_variant || 'gen8' }}- \){{ github.run_number }}
+          name: turnip-${{ github.event.inputs.build_variant || 'gen8' }}-${{ github.run_number }}
           path: build_workspace/*.zip
           retention-days: 30
 
@@ -98,7 +98,7 @@ jobs:
           name: "Turnip Driver ${{ steps.info.outputs.date }}"
           tag_name: ${{ steps.info.outputs.tag }}
           body: |
-            ## Turnip Driver Build
+            ## Turnip Driver
             
             **Variant:** `${{ github.event.inputs.build_variant || 'gen8' }}`
             **Mesa Version:** ${{ steps.info.outputs.mesa_ver }}
