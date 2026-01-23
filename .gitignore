@@ -1,5 +1,5 @@
 # Build outputs
-driver_chamber/
+build_workspace/
 *.zip
 *.so
 *.log
