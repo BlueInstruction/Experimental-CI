@@ -467,7 +467,6 @@ run_meson_setup() {
         -Dvulkan-drivers=freedreno \
         -Dvulkan-beta=true \
         -Dvulkan-layers=device-select,overlay \
-        -Dbuild-aco-tests=true \
         -Dfreedreno-kmds=kgsl \
         -Db_lto=true \
         -Db_ndebug=true \
