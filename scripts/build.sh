@@ -25,7 +25,7 @@ MESA_WHITEBELYASH_BRANCH="gen8"
 
 # Runtime Config
 MESA_REPO_SOURCE="${MESA_REPO_SOURCE:-freedesktop}"
-BUILD_VARIANT="${1:-gen8}"
+BUILD_VARIANT="${1:-gen7}"
 CUSTOM_COMMIT="${2:-}"
 COMMIT_HASH_SHORT=""
 MESA_VERSION=""
@@ -125,12 +125,12 @@ clone_mesa() {
     if retry_command "git clone --depth=500 '$MESA_FREEDESKTOP' '$BUILD_DIR/mesa' 2>/dev/null" "Cloning from GitLab"; then
         cd "$BUILD_DIR/mesa"
         
-        # main
+        # التأكد من أننا على فرع main ونأخذ أحدث التزام ممكن
         git remote set-branches origin main
         git fetch origin main --depth=1 --update-shallow || warn "Shallow fetch failed, continuing anyway"
         git checkout main || warn "Checkout main failed, using whatever branch was cloned"
         git reset --hard origin/main || warn "Reset to origin/main failed"
-        git clean -fdx || true
+        git clean -fdx || true  # تنظيف أي ملفات غير متتبعة إذا وجدت
         
         setup_mesa_repo
         return
@@ -224,30 +224,9 @@ apply_patch_file() {
     return 1
 }
 
-apply_merge_request() {
-    local mr_id="$1"
-    log "Fetching MR !$mr_id..."
-    cd "$BUILD_DIR/mesa"
-
-    if ! git fetch origin "refs/merge-requests/$mr_id/head" 2>/dev/null; then
-        warn "Could not fetch MR $mr_id"
-        return 1
-    fi
-
-    if git merge --no-edit FETCH_HEAD 2>/dev/null; then
-        success "Merged MR !$mr_id"
-        return 0
-    fi
-
-    warn "Merge conflict in MR $mr_id, skipping"
-    git merge --abort 2>/dev/null || true
-    return 1
-}
-
 # INLINE PATCHES
 
-# Sysmem Rendering Preference - Force sysmem rendering by setting TU_DEBUG environment
-# This is a safe approach that does not modify void functions
+# Sysmem Rendering Preference
 apply_sysmem_rendering() {
     log "Applying sysmem rendering preference..."
     cd "$BUILD_DIR/mesa"
@@ -264,11 +243,8 @@ apply_sysmem_rendering() {
         return 0
     fi
 
-    # Add marker comment at the top
     sed -i '1i\/* Build: Sysmem Rendering Preference */' "$file"
 
-    # Modify tu_device to prefer sysmem rendering
-    # Find and modify the autotune or render mode selection
     if grep -q "use_bypass" "$file"; then
         sed -i 's/use_bypass = false/use_bypass = true/g' "$file" 2>/dev/null || true
     fi
@@ -277,7 +253,7 @@ apply_sysmem_rendering() {
     return 0
 }
 
-# Memory Optimization - Disable cached coherent memory
+# Memory Optimization
 apply_memory_optimization() {
     log "Applying memory optimization..."
     cd "$BUILD_DIR/mesa"
@@ -295,121 +271,6 @@ apply_memory_optimization() {
     fi
 
     [ $changes -gt 0 ] && success "Memory optimization applied ($changes files)" || warn "No changes made"
-}
-
-# DX12 Device Caps Override - Critical for VKD3D
-apply_dx12_device_caps() {
-    log "Applying DX12 device caps override..."
-    cd "$BUILD_DIR/mesa"
-
-    local device_file="src/freedreno/vulkan/tu_device.cc"
-    local physical_file="src/freedreno/vulkan/tu_physical_device.cc"
-
-    if [ ! -f "$device_file" ]; then
-        warn "Device file not found"
-        return 1
-    fi
-
-    if grep -q "Build: DX12 Caps" "$device_file" 2>/dev/null; then
-        info "DX12 device caps already applied"
-        return 0
-    fi
-
-    # Increase descriptor limits for DX12
-    sed -i 's/maxBoundDescriptorSets = 4/maxBoundDescriptorSets = 8/g' "$device_file" 2>/dev/null || true
-    sed -i 's/maxPerStageDescriptorSamplers = 16/maxPerStageDescriptorSamplers = 64/g' "$device_file" 2>/dev/null || true
-    sed -i 's/maxPerStageDescriptorStorageBuffers = 24/maxPerStageDescriptorStorageBuffers = 64/g' "$device_file" 2>/dev/null || true
-    sed -i 's/maxPerStageDescriptorStorageImages = 8/maxPerStageDescriptorStorageImages = 32/g' "$device_file" 2>/dev/null || true
-
-    # Enable shaderInt64
-    sed -i 's/shaderInt64 = false/shaderInt64 = true/g' "$device_file" 2>/dev/null || true
-
-    # Add marker
-    sed -i '1i\/* Build: DX12 Caps Override */' "$device_file"
-
-    success "DX12 device caps applied"
-}
-
-# Wave Ops Force - Required for UE5
-apply_wave_ops_force() {
-    log "Applying wave ops force..."
-    cd "$BUILD_DIR/mesa"
-
-    local shader_file="src/freedreno/vulkan/tu_shader.cc"
-    local compiler_file="src/freedreno/ir3/ir3_compiler.c"
-
-    local changes=0
-
-    # Force subgroup size adjustments
-    if [ -f "$shader_file" ]; then
-        if ! grep -q "Build: Wave Ops" "$shader_file" 2>/dev/null; then
-            sed -i 's/subgroupSize = 64/subgroupSize = 32/g' "$shader_file" 2>/dev/null || true
-            sed -i 's/minSubgroupSize = 64/minSubgroupSize = 32/g' "$shader_file" 2>/dev/null || true
-            sed -i 's/maxSubgroupSize = 128/maxSubgroupSize = 64/g' "$shader_file" 2>/dev/null || true
-            sed -i '1i\/* Build: Wave Ops Force */' "$shader_file"
-            ((changes++))
-        fi
-    fi
-
-    # Enable wave ops in compiler
-    if [ -f "$compiler_file" ]; then
-        sed -i 's/has_wave_ops = false/has_wave_ops = true/g' "$compiler_file" 2>/dev/null || true
-        ((changes++))
-    fi
-
-    [ $changes -gt 0 ] && success "Wave ops force applied ($changes files)" || warn "No changes made"
-}
-
-# Enhanced Barriers Relax - For DX12 barrier model
-apply_enhanced_barriers_relax() {
-    log "Applying enhanced barriers relax..."
-    cd "$BUILD_DIR/mesa"
-
-    local cmd_file="src/freedreno/vulkan/tu_cmd_buffer.cc"
-
-    if [ ! -f "$cmd_file" ]; then
-        warn "Command buffer file not found"
-        return 1
-    fi
-
-    if grep -q "Build: Barriers Relax" "$cmd_file" 2>/dev/null; then
-        info "Enhanced barriers already applied"
-        return 0
-    fi
-
-    # Comment out strict barrier assertions (safe approach)
-    sed -i 's/assert(src_stage_mask)//* Build: Barriers Relax *\/ \/\/ assert(src_stage_mask)/g' "$cmd_file" 2>/dev/null || true
-    sed -i 's/assert(dst_stage_mask)/\/\/ assert(dst_stage_mask)/g' "$cmd_file" 2>/dev/null || true
-
-    success "Enhanced barriers relax applied"
-}
-
-# UE5 Resource Aliasing - For transient buffers
-apply_ue5_resource_aliasing() {
-    log "Applying UE5 resource aliasing..."
-    cd "$BUILD_DIR/mesa"
-
-    local memory_file="src/freedreno/vulkan/tu_device_memory.cc"
-
-    if [ ! -f "$memory_file" ]; then
-        memory_file="src/freedreno/vulkan/tu_device.cc"
-    fi
-
-    if [ ! -f "$memory_file" ]; then
-        warn "Memory file not found"
-        return 1
-    fi
-
-    if grep -q "Build: UE5 Aliasing" "$memory_file" 2>/dev/null; then
-        info "UE5 resource aliasing already applied"
-        return 0
-    fi
-
-    # Relax aliasing checks
-    sed -i 's/aliasing_allowed = false/aliasing_allowed = true/g' "$memory_file" 2>/dev/null || true
-    sed -i '1i\/* Build: UE5 Aliasing */' "$memory_file"
-
-    success "UE5 resource aliasing applied"
 }
 
 # BUILD SYSTEM
@@ -518,27 +379,33 @@ package_build() {
     cd "$BUILD_DIR"
 
     cp "mesa/$SO_FILE" libvulkan_freedreno.so
-    patchelf --set-soname "vulkan.adreno.so" libvulkan_freedreno.so
-    mv libvulkan_freedreno.so vulkan.adreno.so
+    patchelf --set-soname "vulkan.ad07xx.so" libvulkan_freedreno.so
+    mv libvulkan_freedreno.so vulkan.ad07xx.so
 
-    local FILENAME="Turnip-${variant_name}-${MESA_VERSION}-${COMMIT_HASH_SHORT}"
+    # source
+    local FILENAME
+    if [ "$MESA_REPO_SOURCE" = "whitebelyash" ]; then
+        FILENAME="Turnip-driver-${variant_name}-${MESA_VERSION}-${COMMIT_HASH_SHORT}"
+    else
+        FILENAME="Turnip-driver-${MESA_VERSION}-${COMMIT_HASH_SHORT}"
+    fi
 
     cat <<EOF > meta.json
 {
     "schemaVersion": 1,
     "name": "Turnip ${variant_name}",
     "description": "Mesa ${MESA_VERSION} - ${variant_name} variant - Built: ${BUILD_DATE}",
-    "author": "BuildSystem",
+    "author": "Blue",
     "packageVersion": "1",
-    "vendor": "Mesa/Freedreno/whitebelyash",
+    "vendor": "Freedreno/whitebelyash",
     "driverVersion": "${MESA_VERSION}",
     "minApi": 27,
-    "libraryName": "vulkan.adreno.so"
+    "libraryName": "vulkan.ad07xx.so"
 }
 EOF
 
-    zip -9 "${FILENAME}.zip" vulkan.adreno.so meta.json
-    rm -f vulkan.adreno.so meta.json
+    zip -9 "${FILENAME}.zip" vulkan.ad07xx.so meta.json
+    rm -f vulkan.ad07xx.so meta.json
 
     local size=$(du -h "${FILENAME}.zip" | cut -f1)
     success "Created: ${FILENAME}.zip ($size)"
@@ -564,107 +431,23 @@ reset_mesa() {
     git clean -fd 2>/dev/null || true
 }
 
+build_gen7() {
+    header "GEN7 BUILD (Freedesktop)"
+    reset_mesa
+    apply_memory_optimization
+    apply_sysmem_rendering
+    perform_build "Gen7"
+}
+
 build_gen8() {
-    header "GEN8 BUILD"
+    header "GEN8 BUILD (Whitebelyash)"
     reset_mesa
     apply_sysmem_rendering
     perform_build "Gen8"
 }
 
-build_gen8_phoenix() {
-    header "GEN8-PHOENIX BUILD"
-    reset_mesa
-    apply_sysmem_rendering
-    # apply_patch_file "phoenix/wings_boost"
-    perform_build "Gen8-Phoenix"
-}
-
-build_gen7() {
-    header "GEN9 BUILD"
-    reset_mesa
-    apply_memory_optimization
-    apply_sysmem_rendering
-    # apply_patch_file "falcon/a6xx_fix"
-    # apply_patch_file "falcon/a750_cse_fix"
-    # apply_patch_file "falcon/lrz_fix"
-    # apply_patch_file "falcon/adreno750_dx12"
-    # apply_patch_file "falcon/vertex_buffer_fix"
-    perform_build "Gen9"
-}
-
-build_shadow_variant() {
-    header "SHADOW VARIANT BUILD"
-    reset_mesa
-    # apply_merge_request "37802"
-    perform_build "Shadow"
-}
-
-build_hawk_variant() {
-    header "HAWK VARIANT BUILD"
-    reset_mesa
-    apply_sysmem_rendering
-    apply_memory_optimization
-    # apply_patch_file "phoenix/wings_boost"
-    # apply_patch_file "common/memory_fix"
-    perform_build "Hawk"
-}
-
-build_dx12_heavy() {
-    header "DX12 HEAVY BUILD"
-    reset_mesa
-
-    # Core patches - safe inline modifications only
-    apply_sysmem_rendering
-    apply_memory_optimization
-
-    # DX12/UE5 specific patches - safe inline modifications
-    apply_dx12_device_caps
-    apply_wave_ops_force
-    apply_enhanced_barriers_relax
-    apply_ue5_resource_aliasing
-
-    # Skip file-based patches that may conflict with current Mesa version
-    # These need to be updated for each Mesa version
-    # apply_patch_file "dx12/device_caps_override"
-    # apply_patch_file "dx12/wave_ops_force"
-    # apply_patch_file "dx12/mesh_shader_relax"
-    # apply_patch_file "dx12/enhanced_barriers_relax"
-    # apply_patch_file "dx12/ue5_resource_aliasing"
-
-    perform_build "DX12-Heavy"
-}
-
-build_all_variants() {
-    header "BUILDING ALL VARIANTS"
-    local variants=("gen8" "gen8_phoenix" "gen7" "shadow_variant" "hawk_variant" "dx12_heavy")
-    local success_count=0
-    local failed=()
-
-    for v in "${variants[@]}"; do
-        echo ""
-        local func_name="build_${v//-/_}"
-        if type "$func_name" &>/dev/null; then
-            if $func_name; then
-                ((success_count++))
-            else
-                failed+=("$v")
-            fi
-        else
-            warn "Unknown build function: $func_name"
-            failed+=("$v")
-        fi
-    done
-
-    echo ""
-    info "Build Summary: $success_count/${#variants[@]} successful"
-    [ ${#failed[@]} -gt 0 ] && warn "Failed: ${failed[*]}"
-}
-
 # MAIN
 main() {
-    echo ""
-    echo ""
-    echo ""
     echo ""
     echo ""
     info "Variant: $BUILD_VARIANT"
@@ -676,25 +459,33 @@ main() {
     prepare_build_dir
 
     case "$BUILD_VARIANT" in
-        gen8)          build_gen8 ;;
-        gen8-phoenix)  build_gen8_phoenix ;;
-        gen7)          build_gen7 ;;
-        shadow)        build_shadow_variant ;;
-        hawk)          build_hawk_variant ;;
-        dx12-heavy)    build_dx12_heavy ;;
-        all)           build_all_variants ;;
+        gen7)
+            if [ "$MESA_REPO_SOURCE" != "freedesktop" ]; then
+                warn "gen7 is recommended for freedesktop source"
+            fi
+            build_gen7
+            ;;
+        gen8)
+            if [ "$MESA_REPO_SOURCE" != "whitebelyash" ]; then
+                warn "gen8 is recommended for whitebelyash source"
+            fi
+            build_gen8
+            ;;
         *)
             warn "Unknown variant: $BUILD_VARIANT"
-            info "Available: gen8, gen8-phoenix, gen7, shadow, hawk, dx12-heavy, all"
-            warn "Defaulting to gen8..."
-            build_gen8
+            info "Available: gen7 (freedesktop), gen8 (whitebelyash)"
+            if [ "$MESA_REPO_SOURCE" = "whitebelyash" ]; then
+                warn "Defaulting to gen8..."
+                build_gen8
+            else
+                warn "Defaulting to gen7..."
+                build_gen7
+            fi
             ;;
     esac
 
     echo ""
-    success ""
-    success "Complete"
-    success ""
+    success "Build Complete!"
     echo ""
 
     if ls "$BUILD_DIR"/*.zip 1>/dev/null 2>&1; then
