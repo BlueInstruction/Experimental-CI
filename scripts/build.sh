@@ -452,7 +452,7 @@ run_meson_setup() {
         --native-file "$BUILD_DIR/native_build" \
         -Dbuildtype=release \
         -Dplatforms=android \
-        -Dplatform-sdk-version=$API_LEVEL \
+        -Dplatform-sdk-version=$LEVEL \
         -Dandroid-stub=true \
         -Dgallium-drivers= \
         -Dvulkan-drivers=freedreno \
