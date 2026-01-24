@@ -1,1 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Build System <build@system.local>
+Date: $(date)
+Subject: [PATCH] Sysmem rendering preference
 
+---
+ src/freedreno/vulkan/tu_device.cc | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
+index XXXXXXX..XXXXXXX 100644
+--- a/src/freedreno/vulkan/tu_device.cc
++++ b/src/freedreno/vulkan/tu_device.cc
+@@ -XXX,XX +XXX,XX @@ tu_CreateDevice(
+    tu_device_set_debug_params(device);
+ 
+    /* Default sysmem/UBWC behavior */
+-   bool use_bypass = false;
++   /* Prefer sysmem rendering for better compatibility */
++   bool use_bypass = true;
+ 
+    /* Override based on debug options */
+    switch (tu_get_debug_option(&dev->physical_device->instance->debug,
+@@ -XXX,XX +XXX,XX @@ tu_CreateDevice(
+       break;
+    case TU_DEBUG_SYSMEM:
+       use_bypass = true;
++      log("Using sysmem rendering (forced by patch)");
+       break;
+    case TU_DEBUG_GMEM:
+       use_bypass = false;
+       break;
+-- 
+2.34.1
