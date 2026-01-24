@@ -1,28 +1,66 @@
-name: Turnip Driver
+name: Turnip Driver Builder
 
 on:
   workflow_dispatch:
     inputs:
+      mesa_source_type:
+        type: choice
+        description: "Source type"
+        default: "official_release"
+        options:
+          - official_release
+          - staging_branch
+          - custom_commit
+      
+      official_version:
+        type: choice
+        description: "Official version"
+        default: "25.3.4"
+        options:
+          - 25.3.4
+          - 25.2.8
+          - 26.0.0-rc1
+          - custom
+      
+      staging_branch:
+        type: choice
+        description: "Staging branch"
+        default: "staging/25.3"
+        options:
+          - staging/26.0
+          - staging/25.3
+          - staging/25.2
+          - main
+      
       custom_commit:
-        description: ""
+        description: "Custom commit hash"
         required: false
         default: ""
+      
       mesa_repo_source:
         type: choice
-        description: "repo source"
+        description: "Repository source"
         default: "freedesktop"
         options:
           - freedesktop
-          - whitebelyash
+          - 8gen
+      
       build_variant:
         type: choice
-        description: "variants"
+        description: "Build variant"
         default: "a7xx"
         options:
           - a7xx
-          - 8gen
-        # -
-        # -
+          - gen8
+      
+      naming_format:
+        type: choice
+        description: "Naming format"
+        default: "emulator"
+        options:
+          - emulator
+          - simple
+          - detailed
           
   schedule:  
     - cron: "0 7 7,* * *"
@@ -61,17 +99,23 @@ jobs:
             libwayland-dev \
             libx11-xcb-dev \
             libxrandr-dev \
-            libxext-dev
+            libxext-dev \
+            clang \
+            lld
           sudo apt build-dep mesa -y
-          pip install --break-system-packages meson mako PyYAML
+          pip install meson mako PyYAML
 
       - name: Build Turnip Driver
         run: |
           chmod +x scripts/build.sh
+          export MESA_SOURCE_TYPE="${{ github.event.inputs.mesa_source_type || 'official_release' }}"
+          export OFFICIAL_VERSION="${{ github.event.inputs.official_version || '25.3.4' }}"
+          export STAGING_BRANCH="${{ github.event.inputs.staging_branch || 'staging/25.3' }}"
+          export CUSTOM_COMMIT="${{ github.event.inputs.custom_commit || '' }}"
           export MESA_REPO_SOURCE="${{ github.event.inputs.mesa_repo_source || 'freedesktop' }}"
           export BUILD_VARIANT="${{ github.event.inputs.build_variant || 'a7xx' }}"
-          bash scripts/build.sh "$BUILD_VARIANT" "${{ github.event.inputs.custom_commit }}" || {
-            echo ""
+          export NAMING_FORMAT="${{ github.event.inputs.naming_format || 'emulator' }}"
+          bash scripts/build.sh || {
             echo ""
             echo "MESON ERROR LOG"
             echo ""
@@ -80,35 +124,87 @@ jobs:
             exit 1
           }
 
+      - name: Generate Filename
+        id: gen_name
+        run: |
+          cd build_workspace
+          if [ -f version.txt ]; then
+            MESA_VER=$(cat version.txt)
+            CLEAN_VER=$(echo "$MESA_VER" | sed 's/[^0-9.]//g' | sed 's/\.$//')
+          else
+            MESA_VER="unknown"
+            CLEAN_VER="unknown"
+          fi
+          
+          case "${{ github.event.inputs.naming_format || 'emulator' }}" in
+            "emulator")
+              FILENAME="Turnip-${CLEAN_VER}"
+              ;;
+            "simple")
+              FILENAME="Turnip-${{ github.event.inputs.build_variant || 'a7xx' }}-${CLEAN_VER}"
+              ;;
+            "detailed")
+              DATE=$(date +'%Y%m%d')
+              FILENAME="Turnip-${{ github.event.inputs.build_variant || 'a7xx' }}-Mesa${CLEAN_VER}-${DATE}"
+              ;;
+            *)
+              FILENAME="turnip-driver-${CLEAN_VER}"
+              ;;
+          esac
+          
+          CLEAN_FILENAME=$(echo "$FILENAME" | sed 's/[^a-zA-Z0-9_-]//g')
+          
+          echo "filename=${CLEAN_FILENAME}" >> $GITHUB_OUTPUT
+          echo "mesa_version=${MESA_VER}" >> $GITHUB_OUTPUT
+
+      - name: Rename Artifacts
+        run: |
+          cd build_workspace
+          for file in *.zip; do
+            if [ -f "$file" ]; then
+              NEW_NAME="${{ steps.gen_name.outputs.filename }}.zip"
+              mv "$file" "$NEW_NAME"
+              echo "Renamed: $file -> $NEW_NAME"
+            fi
+          done
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: turnip-${{ github.event.inputs.mesa_repo_source || 'freedesktop' }}-${{ github.event.inputs.build_variant || 'a7xx' }}-${{ github.run_number }}
+          name: turnip-driver-${{ github.run_number }}
           path: build_workspace/*.zip
           retention-days: 31
 
       - name: Prepare Release Info
-        id: info
+        id: release_info
         run: |
           echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-          echo "tag=Turnip-$(date +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
-          if [ -f build_workspace/version.txt ]; then
-            echo "mesa_ver=$(cat build_workspace/version.txt)" >> $GITHUB_OUTPUT
-          else
-            echo "mesa_ver=unknown" >> $GITHUB_OUTPUT
-          fi
+          echo "time=$(date +'%H:%M')" >> $GITHUB_OUTPUT
+          echo "tag=Turnip-${{ steps.gen_name.outputs.mesa_version }}-$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "Turnip Driver ${{ steps.info.outputs.date }}"
-          tag_name: ${{ steps.info.outputs.tag }}
+          name: "Turnip Driver ${{ steps.gen_name.outputs.mesa_version }}"
+          tag_name: ${{ steps.release_info.outputs.tag }}
           body: |
-            ## Turnip Driver
+            ## Turnip Vulkan Driver
             
-            **Mesa Version:** ${{ steps.info.outputs.mesa_ver }}
-            **Date:** ${{ steps.info.outputs.date }}
+            **Mesa Version:** ${{ steps.gen_name.outputs.mesa_version }}
+            **Build Date:** ${{ steps.release_info.outputs.date }} ${{ steps.release_info.outputs.time }}
             **Source:** ${{ github.event.inputs.mesa_repo_source || 'freedesktop' }}
+            **Variant:** ${{ github.event.inputs.build_variant || 'a7xx' }}
+            
+            ### Installation:
+            1. Download the ZIP file
+            2. Extract the driver library (libvulkan.adreno.so)
+            3. Place it in the appropriate directory of your Android emulator
+            4. Configure the emulator to use the Turnip driver
+            
+            ### Build Details:
+            - Android API: ${{ env.API_LEVEL }}
+            - NDK: ${{ env.NDK_VERSION }}
+            - Optimizations: Sysmem Rendering, Memory Optimization
             
           files: build_workspace/*.zip
         env:
