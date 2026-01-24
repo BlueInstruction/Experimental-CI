@@ -63,7 +63,7 @@ on:
           - detailed
           
   schedule:  
-    - cron: "0 7 7,* * *"
+    - cron: "0 7 * * *"
 
 permissions:
   contents: write
@@ -117,9 +117,13 @@ jobs:
           export NAMING_FORMAT="${{ github.event.inputs.naming_format || 'emulator' }}"
           bash scripts/build.sh || {
             echo ""
-            echo "MESON ERROR LOG"
+            echo "========== BUILD ERROR =========="
             echo ""
-            cat build_workspace/meson_*.log 2>/dev/null || echo "Log file not found"
+            echo "=== MESON LOG ==="
+            cat build_workspace/meson_*.log 2>/dev/null || echo "Meson log not found"
+            echo ""
+            echo "=== NINJA LOG ==="
+            cat build_workspace/ninja_*.log 2>/dev/null || echo "Ninja log not found"
             echo ""
             exit 1
           }
@@ -152,7 +156,7 @@ jobs:
               ;;
           esac
           
-          CLEAN_FILENAME=$(echo "$FILENAME" | sed 's/[^a-zA-Z0-9_-]//g')
+          CLEAN_FILENAME=$(echo "$FILENAME" | sed 's/[^a-zA-Z0-9._-]//g')
           
           echo "filename=${CLEAN_FILENAME}" >> $GITHUB_OUTPUT
           echo "mesa_version=${MESA_VER}" >> $GITHUB_OUTPUT
@@ -180,7 +184,7 @@ jobs:
         run: |
           echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
           echo "time=$(date +'%H:%M')" >> $GITHUB_OUTPUT
-          echo "tag=Turnip-${{ steps.gen_name.outputs.mesa_version }}-$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+          echo "tag=Turnip-${{ steps.gen_name.outputs.mesa_version }}-$(date +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -195,7 +199,6 @@ jobs:
             **Source:** ${{ github.event.inputs.mesa_repo_source || 'freedesktop' }}
             **Variant:** ${{ github.event.inputs.build_variant || 'a7xx' }}
             
-
             ### Build Details:
             - Android API: ${{ env.API_LEVEL }}
             - NDK: ${{ env.NDK_VERSION }}
