@@ -1,1 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Build System <build@system.local>
+Date: $(date)
+Subject: [PATCH] Compatibility fixes
 
+---
+ src/freedreno/vulkan/tu_device.cc | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
+index XXXXXXX..XXXXXXX 100644
+--- a/src/freedreno/vulkan/tu_device.cc
++++ b/src/freedreno/vulkan/tu_device.cc
+@@ -XXX,XX +XXX,XX @@ tu_CreateDevice(
+       goto fail;
+    }
+ 
++   /* Additional stability fixes for emulator environments */
++   dev->physical_device->instance->enable_robust_buffer_access = true;
++   dev->physical_device->instance->enable_robust_image_access = true;
++   dev->physical_device->instance->max_push_constants_size = 256;
++   dev->physical_device->instance->max_descriptor_set_size = 4096;
++
+    *pDevice = tu_device_to_handle(device);
+ 
+    return VK_SUCCESS;
+@@ -XXX,XX +XXX,XX @@ tu_CreateDevice(
+ fail:
+    if (device)
+       vk_device_finish(&device->vk);
++   
++   /* Cleanup any allocated resources */
++   if (dev->bo_cache)
++      tu_bo_cache_finish(dev);
+ 
+    return result;
+ }
+-- 
+2.34.1
