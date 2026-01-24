@@ -1,36 +1,62 @@
-# Build outputs
+build/
+build-*/
 build_workspace/
-*.zip
-*.so
-*.log
-*.wcp
+build*/
+mesa/build*/
+mesa/builddir/
+out/
+pkg/
+src/
 
-# IDE
+*.so
+*.pyc
+*.pyo
+*.pyd
+
+*.wcp
+*.tar.zst
+*.tar.gz
+*.zip
+core.zip
+
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# Temp
 *.tmp
+*.temp
 *.bak
 *.orig
 
-# Python
+*.log
+build.log
+.cache/
 __pycache__/
-*.pyc
-*.pyo
 
-# NDK
 android-ndk-*/
-core.zip
+checksums.txt
+.act/
 
-# Mesa build
-mesa/build*/
-mesa/builddir/
+*.o
+*.a
+*.dll
+*.exe
+deps/
+bin/
+lib/
+patches/
+*.patch
+*.rej
+
+venv/
+.venv/
+env/
+
+.github/workflows/*.log
+artifacts/
