@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "version (empty = latest)"
+        description: "version"
         required: false
         default: ""
   workflow_call:
@@ -83,8 +83,8 @@ jobs:
             ver="${{ inputs.version }}"
             [[ "$ver" =~ ^v ]] || ver="v$ver"
           else
-            ver=$(curl -sl https://api.github.com/repos/hanskristian-work/vkd3d-proton/releases/latest | jq -r '.tag_name // empty')
-            [[ -z "$ver" ]] && ver=$(curl -sl https://api.github.com/repos/hanskristian-work/vkd3d-proton/releases | jq -r '.[0].tag_name')
+            ver=$(curl -sl https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest | jq -r '.tag_name // empty')
+            [[ -z "$ver" ]] && ver=$(curl -sl https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases | jq -r '.[0].tag_name')
           fi
           echo "tag=$ver" >> $github_env
           echo "version=${ver#v}" >> $github_output
@@ -92,7 +92,7 @@ jobs:
       - name: clone source
         id: clone
         run: |
-          git clone --branch ${{ env.tag }} --depth 1 https://github.com/hanskristian-work/vkd3d-proton.git src
+          git clone --branch ${{ env.tag }} --depth 1 https://github.com/HansKristian-Work/vkd3d-proton.git src
           cd src
           git submodule update --init --recursive --depth 1 --jobs 4
           commit=$(git rev-parse --short=8 head)
