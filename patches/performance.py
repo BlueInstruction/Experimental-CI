@@ -156,7 +156,7 @@ DXR_PATCHES: List[Tuple[str, str, str]] = [
 
 
 class VKD3DPatcher:
-    FORBIDDEN_TYPES = ['pthread_rwlock_t', 'pthread_spinlock_t', 'pthread_barrier_t']
+    FORBIDDEN_TYPES = ['pthread_rwlock_t', 'pthread_spinlock_t', 'pthread_barrier_t', 'pthread_mutex_t']
 
     def __init__(self, arch: str = 'x86_64', dry_run: bool = False):
         self.arch = arch
