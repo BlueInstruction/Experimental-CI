@@ -102,7 +102,7 @@ BARRIER_OPT_PATCHES: List[Tuple[str, str, str]] = [
 
 PIPELINE_CACHE_PATCHES: List[Tuple[str, str, str]] = [
     (r'(struct d3d12_device\s*\{[^}]*)(VkDevice\s+vk_device;)',
-     r'\1\2\n    struct { uint64_t *hashes; VkPipeline *pipelines; size_t count; size_t capacity; pthread_mutex_t lock; } pipeline_cache;',
+     r'\1\2\n    struct { uint64_t *hashes; VkPipeline *pipelines; size_t count; size_t capacity; spinlock_t lock; } pipeline_cache;',
      'device_pipeline_cache'),
 ]
 
