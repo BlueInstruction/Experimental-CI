@@ -39,15 +39,8 @@ patch() {
     log "Patched"
 }
 
-flags() {
-    export CFLAGS="-O3 -march=x86-64-v3 -mtune=generic -msse4.2 -mavx -mavx2 -mfma -ffast-math -fno-math-errno -fomit-frame-pointer -flto=auto -fno-semantic-interposition -DNDEBUG"
-    export CXXFLAGS="$CFLAGS"
-    export LDFLAGS="-Wl,-O2 -Wl,--as-needed -Wl,--gc-sections -flto=auto -s"
-}
-
 build() {
     log "Building..."
-    flags
     cd "$SRC"
     chmod +x ./package-release.sh
     ./package-release.sh "$VERSION" "$OD" --no-package
