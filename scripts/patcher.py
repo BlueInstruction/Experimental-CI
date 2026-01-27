@@ -20,9 +20,17 @@ def mk_asgn(var: str) -> str:
     return rf'(\b{esc}\s*=\s*)([^;]+);'
 
 
+GPU_P: List[PT] = [
+    (mk_asgn('adapter_id.vendor_id'), r'\g<1>0x1002;', 'g0'),
+    (mk_asgn('adapter_id.device_id'), r'\g<1>0x163f;', 'g1'),
+    (r'(VendorId\s*=\s*)[^;]+;', r'\g<1>0x1002;', 'g2'),
+    (r'(DeviceId\s*=\s*)[^;]+;', r'\g<1>0x163f;', 'g3'),
+    (r'(SharedSystemMemory\s*=\s*)[^;]+;', r'\g<1>16384ULL * 1024 * 1024;', 'g4'),
+]
+
 SM_P: List[PT] = [
-    (mk_asgn('data->HighestShaderModel'), r'\g<1>D3D_SHADER_MODEL_6_9;', 'sm69'),
-    (mk_asgn('info.HighestShaderModel'), r'\g<1>D3D_SHADER_MODEL_6_9;', 'sm69i'),
+    (mk_asgn('data->HighestShaderModel'), r'\g<1>D3D_SHADER_MODEL_6_8;', 'sm68'),
+    (mk_asgn('info.HighestShaderModel'), r'\g<1>D3D_SHADER_MODEL_6_8;', 'sm68i'),
 ]
 
 WV_P: List[PT] = [
@@ -73,10 +81,11 @@ RN_P: List[PT] = [
 class V3XPatcher:
     CAP_F = ['device.c']
     EX_D = ['tests', 'demos', 'include', '.git']
-    VER = "2.0.0"
+    VER = "2.0.1"
 
-    def __init__(self, profile: str = 'p7', dry: bool = False, verb: bool = False):
+    def __init__(self, profile: str = 'p7', gpu: bool = True, dry: bool = False, verb: bool = False):
         self.profile = profile
+        self.gpu = gpu
         self.dry = dry
         self.verb = verb
         self.applied = 0
@@ -155,6 +164,7 @@ class V3XPatcher:
         log.info(f"V3X v{self.VER}")
         log.info(f"S:{src}")
         log.info(f"P:{self.profile}")
+        log.info(f"G:{'D3MU' if self.gpu else 'off'}")
         log.info(f"M:{'dry' if self.dry else 'apply'}")
 
         vkd3d = self._find_vkd3d(src)
@@ -170,6 +180,8 @@ class V3XPatcher:
             log.info(f"P:{os.path.basename(fp)}")
             for pg in patches:
                 self._apply_file(fp, pg)
+            if self.gpu:
+                self._apply_file(fp, GPU_P)
 
         log.info(f"A:{self.applied}")
         log.info(f"S:{self.skipped}")
@@ -186,7 +198,8 @@ class V3XPatcher:
             'v': self.VER,
             't': datetime.utcnow().isoformat(),
             'bn': 'd3mu',
-            'cfg': {'p': self.profile, 'd': self.dry},
+            'cfg': {'p': self.profile, 'g': self.gpu, 'd': self.dry},
+            'gpu': {'vid': '0x1002', 'did': '0x163f', 'n': 'D3MU'} if self.gpu else None,
             'st': {'a': self.applied, 's': self.skipped, 'f': self.failed, 'e': len(self.errors)},
             'd': self.details,
             'err': self.errors,
@@ -201,6 +214,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('src')
     parser.add_argument('--profile', choices=['p3', 'p7', 'p9'], default='p7')
+    parser.add_argument('--no-gpu', action='store_true')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--verbose', '-v', action='store_true')
     parser.add_argument('--report', action='store_true')
@@ -210,7 +224,7 @@ def main() -> int:
         log.error(f"NF:{args.src}")
         return 1
 
-    patcher = V3XPatcher(profile=args.profile, dry=args.dry_run, verb=args.verbose)
+    patcher = V3XPatcher(profile=args.profile, gpu=not args.no_gpu, dry=args.dry_run, verb=args.verbose)
     success = patcher.apply(args.src)
 
     if args.report:
