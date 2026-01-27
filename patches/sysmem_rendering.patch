@@ -1,13 +1,1 @@
-diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
-index xyz7890..uvw1234 100644
---- a/src/freedreno/vulkan/tu_device.cc
-+++ b/src/freedreno/vulkan/tu_device.cc
-@@ -456,7 +456,7 @@ tu_CreateDevice(
-    tu_device_set_debug_params(device);
- 
-    /* Default sysmem/UBWC behavior */
--   bool use_bypass = false;
-+   bool use_bypass = true;
- 
-    /* Override based on debug options */
-    switch (tu_get_debug_option(&dev->physical_device->instance->debug,
+
