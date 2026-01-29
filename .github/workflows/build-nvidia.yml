@@ -281,25 +281,25 @@ jobs:
           retention-days: 30
           compression-level: 9
 
-      - name: Create Release
-        if: steps.check.outputs.SKIP == 'false'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}-${{ env.COMMIT }}
-          name: "VKD3D Proton ${{ env.VER }} NV90 (${{ env.COMMIT }})"
-          files: |
-            ${{ env.PKG }}.wcp
-            checksums.txt
-            patch-report.json
-          body: |
+#      - name: Create Release
+#       if: steps.check.outputs.SKIP == 'false'
+#        uses: softprops/action-gh-release@v2
+#        with:
+#          tag_name: ${{ env.RELEASE_TAG }}-${{ env.COMMIT }}
+#          name: "VKD3D Proton ${{ env.VER }} NV90 (${{ env.COMMIT }})"
+#          files: |
+#            ${{ env.PKG }}.wcp
+#            checksums.txt
+#            patch-report.json
+#          body: |
             ## VKD3D Proton ${{ env.VER }} - NV90 (RTX 4090)
             
-            **Build:** `${{ env.COMMIT }}`
-            **Date:** ${{ env.BUILD_DATE }}
-            **FakeGPU:** `0x10DE:0x2684` (RTX 4090 24GB)
+#            **Build:** `${{ env.COMMIT }}`
+#            **Date:** ${{ env.BUILD_DATE }}
+#            **FakeGPU:** `0x10DE:0x2684` (RTX 4090 24GB)
             
             
-            [Source](https://github.com/HansKristian-Work/vkd3d-proton)
+#            [Source](https://github.com/HansKristian-Work/vkd3d-proton)
           draft: false
           prerelease: false
         env:
