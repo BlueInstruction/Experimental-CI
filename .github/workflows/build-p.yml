@@ -1,4 +1,4 @@
-name: Build Proton 10.4 ARM64EC
+name: Build Proton 10.0-4 ARM64EC
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ on:
       version_name:
         description: 'Version name for the build'
         required: true
-        default: '10.4-arm64ec'
+        default: '10.0-4-arm64ec'
 
 jobs:
   build-arm64ec:
@@ -18,7 +18,7 @@ jobs:
     
     env:
       UNI_KIND: "proton-10"
-      REL_TAG_STABLE: "10.4"
+      REL_TAG_STABLE: "10.0-4"
       PATCH_DIR: "./patches"
       OUT_DIR: "./out"
     
