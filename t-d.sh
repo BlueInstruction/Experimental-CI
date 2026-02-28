@@ -752,14 +752,15 @@ print(f"[OK] Pass 1: Forced {nf} feature flag assignments")
 #
 # Pattern: captures any variable->VENDOR_extension_name = <anything until ;>
 # We use a prefix list to match extension fields specifically (avoid false positives)
-VENDORS = r'(?:KHR|EXT|AMD|ARM|ANDROID|FUCHSIA|GGP|GOOGLE|HUAWEI|IMG|INTEL|LUNARG|MESA|MSFT|NN|NV|NVX|OHOS|QCOM|QNX|SEC|VALVE|MVK|AMDX)'
-ext_assign_pat = rf'(\b(\w+)->{VENDORS}_\w+\s*=\s*)([^;{{}}]+)(;)'
+VENDORS = r'(?:KHR|EXT|AMD|AMDX|ARM|ANDROID|FUCHSIA|GGP|GOOGLE|HUAWEI|IMG|INTEL|LUNARG|MESA|MSFT|MVK|NN|NV|NVX|OHOS|QCOM|QNX|SEC|VALVE)'
+# Match ext->VENDOR_name = <value>; — must start with a valid vendor prefix
+# Using a word boundary after -> and requiring the field starts with VENDOR_
+ext_assign_pat = rf'(\b(\w+)->({VENDORS})(_\w+)\s*=\s*)([^;{{}}]+)(;)'
 
 forced_exts = set()
 def force_true(m):
-    field = m.group(2)  # variable name (ext, device, pdev...)
-    forced_exts.add(m.group(0).split('->')[1].split('=')[0].strip())
-    return m.group(1) + 'true' + m.group(4)
+    forced_exts.add(m.group(3) + m.group(4))
+    return m.group(1) + 'true' + m.group(7)
 
 content = re.sub(ext_assign_pat, force_true, content)
 print(f"[OK] Pass 2: Force-set {len(forced_exts)} unique extension fields to true")
@@ -783,9 +784,19 @@ for m in re.finditer(r"Extension\s*\(\s*'(VK_[A-Z0-9_]+)'", vk_py):
 for m in re.finditer(r'"(VK_[A-Z0-9_]+)"\s*:\s*\d+', vk_py):
     mesa_exts.add(m.group(1))
 
-# Format C: 'VK_XXX'  anywhere (fallback)
-for m in re.finditer(r"'(VK_[A-Z0-9_]+)'", vk_py):
-    mesa_exts.add(m.group(1))
+# Format C removed — too broad, picks up platform defines like VK_USE_PLATFORM_*
+
+# Strict filter: only keep names that match VK_VENDOR_extension pattern
+# Valid vendor prefixes for Vulkan extensions
+VALID_VENDORS = {
+    'KHR','EXT','AMD','AMDX','ARM','ANDROID','FUCHSIA','GGP',
+    'GOOGLE','HUAWEI','IMG','INTEL','LUNARG','MESA','MSFT','MVK',
+    'NN','NV','NVX','OHOS','QCOM','QNX','SEC','VALVE',
+}
+mesa_exts = {
+    e for e in mesa_exts
+    if len(e.split('_')) >= 3 and e.split('_')[1] in VALID_VENDORS
+}
 
 print(f"[INFO] Pass 3: Mesa vk_extensions.py knows {len(mesa_exts)} extensions")
 
