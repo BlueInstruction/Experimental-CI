@@ -744,27 +744,46 @@ for p in feats:
     if n: content = new; nf += n
 print(f"[OK] Pass 1: Forced {nf} feature flag assignments")
 
-# ── Pass 2: Force ALL ext->XXX = <anything> to ext->XXX = true ────────────────
-# This is the KEY fix — it overrides capability checks like:
-#   ext->KHR_ray_query = pdev->info.a7xx.has_ray_tracing;  → true
-#   ext->EXT_mesh_shader = false;                           → true
-#   ext->KHR_maintenance7 = true;                           → true (no-op)
+# ── Pass 2: Force ALL extension assignments to true ────────────────────────────
+# Mesa 26.x changed from pointer syntax to struct initializer syntax:
 #
-# Pattern: captures any variable->VENDOR_extension_name = <anything until ;>
-# We use a prefix list to match extension fields specifically (avoid false positives)
+# OLD (Mesa 24.x and before) — pointer assign:
+#   ext->KHR_ray_query = pdev->info.a7xx.has_ray_tracing;
+#
+# NEW (Mesa 25/26.x) — struct initializer:
+#   *ext = (struct vk_device_extension_table) {
+#       .KHR_16bit_storage = pdevice->info.a7xx.has_16bit_storage,
+#       ...
+#   };
+#
+# We handle BOTH patterns so this works on any Mesa version.
 VENDORS = r'(?:KHR|EXT|AMD|AMDX|ARM|ANDROID|FUCHSIA|GGP|GOOGLE|HUAWEI|IMG|INTEL|LUNARG|MESA|MSFT|MVK|NN|NV|NVX|OHOS|QCOM|QNX|SEC|VALVE)'
-# Match ext->VENDOR_name = <value>; — must start with a valid vendor prefix
-# Using a word boundary after -> and requiring the field starts with VENDOR_
-ext_assign_pat = rf'(\b(\w+)->({VENDORS})(_\w+)\s*=\s*)([^;{{}}]+)(;)'
 
 forced_exts = set()
-def force_true(m):
+
+# Pattern A: pointer syntax — ext->VENDOR_name = value;
+ext_assign_ptr = rf'(\b(\w+)->({VENDORS})(_\w+)\s*=\s*)([^;{{}}]+)(;)'
+def force_true_ptr(m):
     forced_exts.add(m.group(3) + m.group(4))
     return m.group(1) + 'true' + m.group(6)
+content = re.sub(ext_assign_ptr, force_true_ptr, content)
+cnt_ptr = len(forced_exts)
 
-content = re.sub(ext_assign_pat, force_true, content)
+# Pattern B: struct initializer — .VENDOR_name = value,
+# Matches .KHR_foo = expr,  inside struct initializer blocks
+ext_assign_struct = rf'(\.)({VENDORS})(_\w+)(\s*=\s*)([^,\n\}}/]+)(,?)'
+struct_forced = set()
+def force_true_struct(m):
+    name = m.group(2) + m.group(3)
+    struct_forced.add(name)
+    forced_exts.add(name)
+    return m.group(1) + m.group(2) + m.group(3) + m.group(4) + 'true' + m.group(6)
+content = re.sub(ext_assign_struct, force_true_struct, content)
+cnt_struct = len(struct_forced)
+
 print(f"[OK] Pass 2: Force-set {len(forced_exts)} unique extension fields to true")
-print(f"     Sample forced: {sorted(forced_exts)[:5]}")
+print(f"     Pointer-syntax: {cnt_ptr}, Struct-init-syntax: {cnt_struct}")
+print(f"     Sample: {sorted(forced_exts)[:5]}")
 
 # ── Pass 3: Read Mesa's EXTENSIONS list from vk_extensions.py ─────────────────
 # In Mesa, vk_extensions.py contains an EXTENSIONS list with ALL implemented
@@ -821,42 +840,72 @@ INST_ONLY = {
 mesa_dev_exts = [e for e in sorted(mesa_exts) if e not in INST_ONLY]
 
 # Find which ones weren't already force-set in Pass 2
+# Check BOTH pointer syntax (ext->VENDOR_name = true;) 
+# AND struct initializer syntax (.VENDOR_name = true,)
 already_forced = set()
 for m in re.finditer(rf'\b(\w+)->({VENDORS}_\w+)\s*=\s*true\s*;', content):
     already_forced.add('VK_' + m.group(2))
+for m in re.finditer(rf'\.({VENDORS}_\w+)\s*=\s*true\s*,?', content):
+    already_forced.add('VK_' + m.group(1))
 
 missing = [e for e in mesa_dev_exts if e not in already_forced]
 print(f"[INFO] {len(already_forced)} already set true, {len(missing)} need injection")
 
 if missing:
     # Find the ext variable name from existing assignments
+    # Try pointer syntax first, then struct syntax
     ev = 'ext'  # default
     m = re.search(rf'\b(\w+)->{VENDORS}_\w+\s*=\s*true\s*;', content)
-    if m: ev = m.group(1)
+    if m:
+        ev = m.group(1)
+    else:
+        # In struct-init style, look for: tu_physical_device_get_extensions(..., ext)
+        # or the variable that receives *ext = ...
+        m = re.search(r'struct vk_device_extension_table\s*\*\s*(\w+)', content)
+        if m: ev = m.group(1)
 
     # Find end of get_device_extensions function for injection
-    # Strategy: brace-count from function signature
+    # Also handle struct-init syntax: the closing "};" of the struct assignment
     inject_pos = None
-    for pat in [
-        r'tu_get_device_extensions\s*\([^{]*?\{',
-        r'get_device_extensions\s*\([^{]*?\{',
-        r'vk_device_extension_table\s*\*\s*\w+[^{]*?\{',
-    ]:
-        fm = re.search(pat, content, re.DOTALL)
-        if fm:
-            d = 1; p = fm.end()
-            while p < len(content) and d > 0:
-                if content[p] == '{': d += 1
-                elif content[p] == '}': d -= 1
-                p += 1
-            inject_pos = p - 1
-            print(f"[OK] Found function end at pos {inject_pos}")
-            break
+    
+    # For struct-init style: find the *ext = (...) { ... }; block and inject after
+    struct_init_m = re.search(
+        r'\*\s*\w+\s*=\s*\(struct vk_device_extension_table\)\s*\{',
+        content
+    )
+    if struct_init_m:
+        # Find the closing }; of the struct
+        d = 1; p = struct_init_m.end()
+        while p < len(content) and d > 0:
+            if content[p] == '{': d += 1
+            elif content[p] == '}': d -= 1
+            p += 1
+        # Skip past the ; after }
+        while p < len(content) and content[p] in ' \t;': p += 1
+        inject_pos = p
+        print(f"[OK] Found struct-init end at pos {inject_pos}, injecting after it")
 
     if inject_pos is None:
-        # Fallback: inject after last extension assignment
+        for pat in [
+            r'tu_get_device_extensions\s*\([^{]*?\{',
+            r'get_device_extensions\s*\([^{]*?\{',
+            r'vk_device_extension_table\s*\*\s*\w+[^{]*?\{',
+        ]:
+            fm = re.search(pat, content, re.DOTALL)
+            if fm:
+                d = 1; p = fm.end()
+                while p < len(content) and d > 0:
+                    if content[p] == '{': d += 1
+                    elif content[p] == '}': d -= 1
+                    p += 1
+                inject_pos = p - 1
+                print(f"[OK] Found function end at pos {inject_pos}")
+                break
+
+    if inject_pos is None:
+        # Fallback: inject after last extension assignment (any syntax)
         lm = None
-        for m in re.finditer(rf'\b\w+->{VENDORS}_\w+\s*=\s*true\s*;', content):
+        for m in re.finditer(rf'(\.{VENDORS}_\w+\s*=\s*true|{VENDORS}_\w+\s*=\s*true\s*;)', content):
             lm = m
         if lm: inject_pos = lm.end(); print(f"[OK] Fallback inject pos {inject_pos}")
 
@@ -873,9 +922,11 @@ if missing:
 
 with open(tu_path, 'w') as f: f.write(content)
 
-# Count final true assignments
-total = len(re.findall(rf'\b\w+->{VENDORS}_\w+\s*=\s*true\s*;', content))
-print(f"[OK] FINAL: {total} extension fields set to true in tu_device.cc")
+# Count final true assignments (both syntaxes)
+total_ptr = len(re.findall(rf'\b\w+->{VENDORS}_\w+\s*=\s*true\s*;', content))
+total_struct = len(re.findall(rf'\.{VENDORS}_\w+\s*=\s*true\s*,?', content))
+total = total_ptr + total_struct
+print(f"[OK] FINAL: {total} extension fields set to true ({total_struct} struct-init, {total_ptr} pointer-assign)")
 PYEOF
 
     log_success "Vulkan extensions support applied"
@@ -1050,6 +1101,327 @@ PYEOF
     log_success "SD 8 Gen 3 (A750) device tuning applied"
 }
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# apply_rt_stub_support — Layer 1: RT / DXR / PT stub inside Turnip
+# ───────────────────────────────────────────────────────────────────────────────
+# Root cause of the winevulkan assertion:
+#   File: .../winevulkan/loader_thunks.c  Line: 3156
+#   Expression: "!status && "vkCreateRayTracingPipelinesKHR""
+#
+# The loader thunk asserts when vkCreateRayTracingPipelinesKHR returns != VK_SUCCESS.
+# Turnip has stubs that return VK_ERROR_FEATURE_NOT_PRESENT because the RT
+# properties are all zeroed out (shaderGroupHandleSize=0 → driver bails early).
+#
+# Fix strategy — match what Qualcomm does in vendor driver updates:
+#   1. Fill RT property structs with valid non-zero values
+#   2. Fill RT feature bits = true
+#   3. Patch the pipeline-create stub to always return VK_SUCCESS
+#      (no real shader invocation — draws nothing, but doesn't crash)
+#   4. Patch vkCmdTraceRaysKHR to be a safe no-op
+#
+# DXR 1.0 / 1.1 detection:  VKD3D queries Vulkan RT properties; if valid → passes
+# PT (Path Tracing) detection: same path via DXR 1.1 + inline ray query
+# DLSS detection: separate (NVAPI/NGX path) — handled in apply_dlss_ngx_stub
+# ═══════════════════════════════════════════════════════════════════════════════
+apply_rt_stub_support() {
+    local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$tu_dev" ]] && { log_warn "RT stub: tu_device.cc not found"; return 0; }
+    if grep -q "RT_STUB_APPLIED\|shaderGroupHandleSize.*=.*32" "$tu_dev"; then
+        log_info "RT stub already applied"
+        return 0
+    fi
+    log_info "Applying RT stub (DXR/PT detection fix)"
+    python3 - "$tu_dev" << 'PYEOF'
+import sys, re
+
+path = sys.argv[1]
+with open(path, encoding='utf-8', errors='ignore') as f:
+    c = f.read()
+
+changed = 0
+
+# ── 1. RT Pipeline Properties ─────────────────────────────────────────────────
+# VkPhysicalDeviceRayTracingPipelinePropertiesKHR
+# Adreno 750 RT engine specs (conservative safe values):
+#   shaderGroupHandleSize      = 32   (spec minimum; all drivers use 32)
+#   shaderGroupHandleAlignment = 32   (spec minimum)
+#   shaderGroupBaseAlignment   = 64   (64-byte SBT base alignment)
+#   shaderGroupHandleCaptureReplaySize = 32
+#   maxRayRecursionDepth       = 1    (stub: 1 level, no real recursion)
+#   maxShaderGroupStride       = 4096
+#   maxRayDispatchInvocationCount = 1073741824  (2^30, spec max)
+#   maxRayHitAttributeSize     = 32
+RT_PROPS = {
+    r'(shaderGroupHandleSize\s*=\s*)\d+':      r'\g<1>32',
+    r'(shaderGroupHandleAlignment\s*=\s*)\d+': r'\g<1>32',
+    r'(shaderGroupBaseAlignment\s*=\s*)\d+':   r'\g<1>64',
+    r'(shaderGroupHandleCaptureReplaySize\s*=\s*)\d+': r'\g<1>32',
+    r'(maxRayRecursionDepth\s*=\s*)\d+':       r'\g<1>1',
+    r'(maxShaderGroupStride\s*=\s*)\d+':       r'\g<1>4096',
+    r'(maxRayDispatchInvocationCount\s*=\s*)\d+': r'\g<1>1073741824',
+    r'(maxRayHitAttributeSize\s*=\s*)\d+':     r'\g<1>32',
+}
+for pat, rep in RT_PROPS.items():
+    new, n = re.subn(pat, rep, c)
+    if n: c = new; changed += n; print(f"  [RT-PROP] {pat[:50]} → {n} match(es)")
+
+# ── 2. RT Feature Bits ────────────────────────────────────────────────────────
+# VkPhysicalDeviceRayTracingPipelineFeaturesKHR
+# VkPhysicalDeviceAccelerationStructureFeaturesKHR
+# VkPhysicalDeviceRayQueryFeaturesKHR
+RT_FEATURES = [
+    r'(rayTracingPipeline\s*=\s*)VK_FALSE',
+    r'(rayTracingPipelineTraceRaysIndirect\s*=\s*)VK_FALSE',
+    r'(rayTracingPipelineShaderGroupHandleCaptureReplay\s*=\s*)VK_FALSE',
+    r'(accelerationStructure\s*=\s*)VK_FALSE',
+    r'(accelerationStructureCapturereplay\s*=\s*)VK_FALSE',
+    r'(accelerationStructureIndirectBuild\s*=\s*)VK_FALSE',
+    r'(descriptorBindingAccelerationStructureUpdateAfterBind\s*=\s*)VK_FALSE',
+    r'(rayQuery\s*=\s*)VK_FALSE',
+]
+for pat in RT_FEATURES:
+    new, n = re.subn(pat, pat.replace(r')VK_FALSE', r')VK_TRUE'), c)
+    if n: c = new; changed += n; print(f"  [RT-FEAT] {pat[:60]}")
+
+# ── 3. Stub vkCreateRayTracingPipelinesKHR → always VK_SUCCESS ───────────────
+# Find the function and inject early-return VK_SUCCESS if handles are non-null
+# Pattern: match the function body opening brace
+stub_pattern = r'(vkCreateRayTracingPipelinesKHR\b[^{]{0,300}\{)'
+def inject_stub_return(m):
+    return m.group(0) + '''
+   /* RT_STUB_APPLIED: return VK_SUCCESS stub — no real RT backend */
+   if (pPipelines) {
+      for (uint32_t _i = 0; _i < createInfoCount; _i++)
+         pPipelines[_i] = VK_NULL_HANDLE;
+   }
+   return VK_SUCCESS;
+'''
+new, n = re.subn(stub_pattern, inject_stub_return, c, count=1, flags=re.DOTALL)
+if n:
+    c = new; changed += n
+    print(f"  [RT-STUB] Injected VK_SUCCESS stub into vkCreateRayTracingPipelinesKHR")
+else:
+    print(f"  [RT-WARN] vkCreateRayTracingPipelinesKHR body not found — stub not injected")
+
+# ── 4. Make vkCmdTraceRaysKHR a safe no-op ───────────────────────────────────
+trace_pattern = r'(vkCmdTraceRaysKHR\b[^{]{0,300}\{)'
+def inject_trace_noop(m):
+    return m.group(0) + '''
+   /* RT_STUB_APPLIED: no-op trace — no real RT backend */
+   (void)commandBuffer; (void)pRaygenShaderBindingTable;
+   (void)pMissShaderBindingTable; (void)pHitShaderBindingTable;
+   (void)pCallableShaderBindingTable;
+   (void)width; (void)height; (void)depth;
+   return;
+'''
+new, n = re.subn(trace_pattern, inject_trace_noop, c, count=1, flags=re.DOTALL)
+if n:
+    c = new; changed += n
+    print(f"  [RT-STUB] Injected no-op into vkCmdTraceRaysKHR")
+else:
+    print(f"  [RT-WARN] vkCmdTraceRaysKHR body not found — no-op not injected")
+
+print(f"[OK] RT stub: {changed} change(s) total")
+with open(path, 'w', encoding='utf-8') as f: f.write(c)
+PYEOF
+    log_success "RT stub applied (DXR 1.0 / DXR 1.1 / PT detection should now pass)"
+}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# apply_dlss_ngx_stub — Layer 2: DLSS detection emulation via NGX stub
+# ───────────────────────────────────────────────────────────────────────────────
+# DLSS detection chain:
+#   App → D3D12Device → NVAPI (nvapi64.dll) → NGX (nvngx.dll / _nvngx.dll)
+#       → NVSDK_NGX_D3D12_Init → feature query → DLSS feature available
+#
+# Since we already spoof GPU as NVIDIA RTX 4090 (deck_emu), the app believes
+# it's on NVIDIA hardware. The missing piece is that Wine's NVAPI stub and
+# NGX don't report DLSS as available.
+#
+# Fix: patch the Wine NVAPI detection layer inside Mesa's WSI/device reporting
+# so that:
+#   1. NvAPI_GPU_GetGPUType    → NVAPI_GPU_TYPE_DISCRETE
+#   2. NvAPI_GPU_GetFullName   → "NVIDIA GeForce RTX 4090"
+#   3. NvAPI_GPU_GetPCIIdentifiers → vendor=0x10DE device=0x2684
+#   4. NGX init returns success (handled by dxvk-nvapi side)
+#
+# The Mesa side: ensure PCI IDs and driver version match NVIDIA blob expectations.
+# This is done via tu_device.cc property injection (same as deck_emu does).
+# ═══════════════════════════════════════════════════════════════════════════════
+apply_dlss_ngx_stub() {
+    local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$tu_dev" ]] && { log_warn "DLSS stub: tu_device.cc not found"; return 0; }
+
+    # DLSS requires deck_emu NVIDIA to already be applied (vendor=0x10DE etc.)
+    if ! grep -q "0x10DE\|NVIDIA\|DECK_EMU" "$tu_dev"; then
+        log_warn "DLSS stub: deck_emu NVIDIA not applied — DLSS stub skipped"
+        log_warn "Set DECK_EMU_TARGET=nvidia and ENABLE_DECK_EMU=true"
+        return 0
+    fi
+    if grep -q "DLSS_NGX_STUB\|driverVersion.*0x15F" "$tu_dev"; then
+        log_info "DLSS NGX stub already applied"
+        return 0
+    fi
+
+    log_info "Applying DLSS/NGX driver-version stub"
+    python3 - "$tu_dev" << 'PYEOF'
+import sys, re
+
+path = sys.argv[1]
+with open(path, encoding='utf-8', errors='ignore') as f:
+    c = f.read()
+
+changed = 0
+
+# ── NVIDIA driver version: NGX requires >= 520.xx (0x20800 VkDriverVersion) ──
+# Encode as Vulkan driver version: VK_MAKE_VERSION(535,86,0) = 0x21CD6000
+# (535.86 is a known good baseline for DLSS 3.x)
+NVIDIA_DRIVER_VER = '0x21CD6000'  # 535.86.0
+
+dv_pats = [
+    (r'(driverVersion\s*=\s*)0x[0-9A-Fa-f]+', rf'\g<1>{NVIDIA_DRIVER_VER}'),
+    (r'(driverVersion\s*=\s*)\d+',             rf'\g<1>{NVIDIA_DRIVER_VER}'),
+]
+for pat, rep in dv_pats:
+    new, n = re.subn(pat, rep, c)
+    if n: c = new; changed += n; print(f"  [DLSS] driverVersion = {NVIDIA_DRIVER_VER} ({n} match)")
+
+# ── Conformance version: NVIDIA reports 1.3.x.0 for Vulkan 1.3 ───────────────
+cv_pat = r'(conformanceVersion\s*\{[^}]*major\s*=\s*)(\d+)'
+new, n = re.subn(cv_pat, r'\g<1>1', c)
+if n: c = new; changed += n; print(f"  [DLSS] conformanceVersion.major = 1")
+
+# ── Mark done ─────────────────────────────────────────────────────────────────
+# Add a sentinel comment near top of file after first include
+c = c.replace('#include "tu_device.h"',
+              '#include "tu_device.h"\n/* DLSS_NGX_STUB: applied */\n', 1)
+
+print(f"[OK] DLSS NGX stub: {changed} change(s) total")
+with open(path, 'w', encoding='utf-8') as f: f.write(c)
+PYEOF
+    log_success "DLSS/NGX driver-version stub applied"
+}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# apply_d3d12_basic_fix — Layer 3: Fix D3D12 basic init failure
+# ───────────────────────────────────────────────────────────────────────────────
+# "Failed to init D3D12" means VKD3D itself fails to create the device.
+# Most common causes on Turnip:
+#   1. Descriptor indexing count < 1,000,000 (VKD3D hard requirement)
+#   2. Missing mandatory extension (VK_EXT_robustness2 or VK_KHR_push_descriptor)
+#   3. Vulkan 1.3 features struct missing fields
+#
+# Fix: ensure tu_device.cc reports maxDescriptorSetUpdateAfterBindSampledImages
+# and related counters at ≥ 1,000,000, and that all mandatory descriptor
+# indexing features are set to VK_TRUE.
+# ═══════════════════════════════════════════════════════════════════════════════
+apply_d3d12_basic_fix() {
+    local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$tu_dev" ]] && { log_warn "D3D12 basic fix: tu_device.cc not found"; return 0; }
+    if grep -q "D3D12_BASIC_FIX\|maxDescriptorSetUpdateAfterBind.*1048576" "$tu_dev"; then
+        log_info "D3D12 basic fix already applied"
+        return 0
+    fi
+    log_info "Applying D3D12 basic descriptor indexing fix"
+    python3 - "$tu_dev" << 'PYEOF'
+import sys, re
+
+path = sys.argv[1]
+with open(path, encoding='utf-8', errors='ignore') as f:
+    c = f.read()
+
+changed = 0
+
+# ── 1. Descriptor counts: VKD3D requires >= 1,000,000 UpdateAfterBind ────────
+DESC_LIMITS = {
+    # Samplers
+    r'(maxDescriptorSetUpdateAfterBindSamplers\s*=\s*)(\d+)':
+        (1000000, r'\g<1>1000000'),
+    # Sampled images (textures)
+    r'(maxDescriptorSetUpdateAfterBindSampledImages\s*=\s*)(\d+)':
+        (1000000, r'\g<1>1000000'),
+    # Storage images
+    r'(maxDescriptorSetUpdateAfterBindStorageImages\s*=\s*)(\d+)':
+        (1000000, r'\g<1>1000000'),
+    # Storage buffers
+    r'(maxDescriptorSetUpdateAfterBindStorageBuffers\s*=\s*)(\d+)':
+        (1000000, r'\g<1>1000000'),
+    # Uniform buffers (VKD3D doesn't require 1M for UBO, 72 is fine)
+    # sampled images per stage
+    r'(maxPerStageDescriptorUpdateAfterBindSampledImages\s*=\s*)(\d+)':
+        (1048576, r'\g<1>1048576'),
+    r'(maxPerStageDescriptorUpdateAfterBindStorageImages\s*=\s*)(\d+)':
+        (1048576, r'\g<1>1048576'),
+    r'(maxPerStageDescriptorUpdateAfterBindStorageBuffers\s*=\s*)(\d+)':
+        (1048576, r'\g<1>1048576'),
+    # Total resources per stage
+    r'(maxPerStageUpdateAfterBindResources\s*=\s*)(\d+)':
+        (1048576, r'\g<1>1048576'),
+}
+for pat, (min_val, rep) in DESC_LIMITS.items():
+    # Only replace if current value < min_val
+    def maybe_replace(m, min_v=min_val, r=rep):
+        try:
+            cur = int(m.group(2))
+            if cur < min_v:
+                return re.sub(pat, r, m.group(0))
+        except (IndexError, ValueError):
+            pass
+        return m.group(0)
+    new, n = re.subn(pat, maybe_replace, c)
+    if n: c = new; changed += n; print(f"  [DESC] Patched {pat[:60]}")
+
+# ── 2. Mandatory descriptor indexing features ─────────────────────────────────
+INDEXING_FEATURES = [
+    'shaderSampledImageArrayNonUniformIndexing',
+    'shaderStorageBufferArrayNonUniformIndexing',
+    'shaderStorageImageArrayNonUniformIndexing',
+    'shaderUniformTexelBufferArrayNonUniformIndexing',
+    'shaderStorageTexelBufferArrayNonUniformIndexing',
+    'descriptorBindingSampledImageUpdateAfterBind',
+    'descriptorBindingStorageImageUpdateAfterBind',
+    'descriptorBindingStorageBufferUpdateAfterBind',
+    'descriptorBindingUniformTexelBufferUpdateAfterBind',
+    'descriptorBindingStorageTexelBufferUpdateAfterBind',
+    'descriptorBindingUpdateUnusedWhilePending',
+    'descriptorBindingPartiallyBound',
+    'descriptorBindingVariableDescriptorCount',
+    'runtimeDescriptorArray',
+]
+for feat in INDEXING_FEATURES:
+    new, n = re.subn(rf'({feat}\s*=\s*)VK_FALSE', rf'\g<1>VK_TRUE', c)
+    if n: c = new; changed += n; print(f"  [IDX] {feat} = VK_TRUE")
+
+# ── 3. Vulkan 1.3 core features that VKD3D 3.x requires ─────────────────────
+VK13_FEATURES = [
+    'dynamicRendering',
+    'synchronization2',
+    'maintenance4',
+    'shaderIntegerDotProduct',
+    'inlineUniformBlock',
+    'pipelineCreationCacheControl',
+]
+for feat in VK13_FEATURES:
+    new, n = re.subn(rf'({feat}\s*=\s*)VK_FALSE', rf'\g<1>VK_TRUE', c)
+    if n: c = new; changed += n; print(f"  [VK13] {feat} = VK_TRUE")
+
+# ── Mark done ─────────────────────────────────────────────────────────────────
+c = c.replace('/* DLSS_NGX_STUB: applied */',
+              '/* DLSS_NGX_STUB: applied */\n/* D3D12_BASIC_FIX: applied */', 1)
+if '/* D3D12_BASIC_FIX: applied */' not in c:
+    c = c.replace('#include "tu_device.h"',
+                  '#include "tu_device.h"\n/* D3D12_BASIC_FIX: applied */', 1)
+
+print(f"[OK] D3D12 basic fix: {changed} change(s) total")
+with open(path, 'w', encoding='utf-8') as f: f.write(c)
+PYEOF
+    log_success "D3D12 basic descriptor indexing fix applied"
+}
+
+
 apply_patches() {
     log_info "Applying patches for $TARGET_GPU"
     cd "$MESA_DIR"
@@ -1086,6 +1458,16 @@ apply_patches() {
         apply_reduce_advertised_memory
         if [[ "$BUILD_VARIANT" == "autotuner" ]]; then
             apply_a6xx_query_fix
+        fi
+
+        # ── D3D12 / DXR / DLSS compatibility stack ─────────────────────────
+        # Layer 3: Fix D3D12 basic init (descriptor indexing requirements)
+        apply_d3d12_basic_fix
+        # Layer 1: RT stub (fixes winevulkan assertion + DXR 1.0/1.1/PT detect)
+        apply_rt_stub_support
+        # Layer 2: DLSS/NGX driver-version stub (requires deck_emu NVIDIA)
+        if [[ "$ENABLE_DECK_EMU" == "true" && "$DECK_EMU_TARGET" == "nvidia" ]]; then
+            apply_dlss_ngx_stub
         fi
     fi
 
