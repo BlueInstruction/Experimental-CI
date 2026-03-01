@@ -852,7 +852,6 @@ PYEOF
 }
 
 
-
 # ── Rob Clark fd/misc branch — a8xx_gen1 VPC sysmem buffer sizes ─────────────
 # Commit: freedreno_devices.py — a8xx_gen1 = GPUProps(
 #   reg_size_vec4 = 128,
@@ -899,57 +898,6 @@ else:
 with open(fp, 'w') as f: f.write(c)
 PYEOF
     log_success "a8xx_gen1 VPC sysmem buffer props applied"
-}
-
-# ── Rob Clark fd/misc branch — Reduce advertised memory ──────────────────────
-# Red Magic 10 Air — SD 8 Gen 3 (A750/a8xx gen1), 12GB LPDDR5X
-# Physical: 12GB = 12884901888 bytes
-# Android usable: ~75% = 9663676416 (~9GB)
-# Mesa should advertise 9GB max, not 12GB (avoids OOM kills)
-apply_reduce_advertised_memory() {
-    local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
-    [[ ! -f "$tu_dev" ]] && { log_warn "tu_device.cc not found"; return 0; }
-    if grep -q "REDUCED_HEAP_CAP\|heap_size.*3 \/ 4\|heap_size.*75" "$tu_dev"; then
-        log_info "Reduced memory already applied"
-        return 0
-    fi
-    python3 - "$tu_dev" << 'PYEOF'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-
-# SD 8 Gen 3 (A750) on Red Magic 10 Air has 12GB LPDDR5X
-# Android's mmap limit is ~75% of physical RAM
-# Cap all Vulkan heap size reports to 75% of what the kernel reports
-changed = 0
-
-# Pattern 1: .heapSize = <expr>  in VkPhysicalDeviceMemoryProperties
-new, n = re.subn(
-    r'(\.heapSize\s*=\s*)([^,};\n]+)',
-    r'\1((\2) * 3 / 4)  /* REDUCED_HEAP_CAP: 75% of physical */',
-    c, count=2  # up to 2 heap entries (device-local + host-visible)
-)
-if n:
-    c = new; changed += n
-    print(f"[OK] .heapSize capped at 75% ({n} entries)")
-
-# Pattern 2: explicit heap_size variable assignment
-if not changed:
-    new, n = re.subn(
-        r'((?:heap|memory)_size\s*=\s*)(total_mem\w*|avail_mem\w*|mem_size\w*|[a-z_]*size[a-z_]*\s*[^;]{0,60})(;)',
-        r'\1((\2) * 3 / 4) /* REDUCED_HEAP_CAP */\3',
-        c, count=1
-    )
-    if n:
-        c = new; changed += n
-        print(f"[OK] heap_size variable capped at 75%")
-
-if not changed:
-    print("[WARN] No heap size pattern found — memory cap skipped")
-
-with open(fp, 'w') as f: f.write(c)
-PYEOF
-    log_success "Reduced advertised memory applied (SD 8 Gen 3 / 12GB optimized)"
 }
 
 
