@@ -523,7 +523,8 @@ print(f"[OK] Lowered {n1+n2} entries to API 1 ({n1} double-quoted, {n2} single-q
 sq = len(re.findall(r"'VK_[A-Z0-9_]+'\s*:\s*\d+", c))
 dq = len(re.findall(r'"VK_[A-Z0-9_]+"\s*:\s*\d+', c))
 Q = "'" if sq >= dq else '"'
-print(f"[INFO] Quote style: {'single' if Q==\"'\" else 'double'} ({sq} sq, {dq} dq)")
+qs = 'single' if Q == "'" else 'double'
+print(f"[INFO] Quote style: {qs} ({sq} sq, {dq} dq)")
 
 # Master extension list -------------------------------------------------------
 ALL = [
