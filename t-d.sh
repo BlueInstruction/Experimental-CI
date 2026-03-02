@@ -1574,7 +1574,7 @@ print_summary() {
 }
 
 main() {
-    log_info "Turnip Driver Builder (Winlator Optimized)"
+    log_info "Turnip Driver Builder"
     log_info "Configuration: target=$TARGET_GPU, variant=$BUILD_VARIANT, source=$MESA_SOURCE"
 
     check_deps
