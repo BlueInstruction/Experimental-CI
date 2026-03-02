@@ -34,7 +34,6 @@ ENABLE_EXT_SPOOF="${ENABLE_EXT_SPOOF:-true}"
 ENABLE_DECK_EMU="${ENABLE_DECK_EMU:-true}"
 DECK_EMU_TARGET="${DECK_EMU_TARGET:-nvidia}"
 ENABLE_TIMELINE_HACK="${ENABLE_TIMELINE_HACK:-true}"
-ENABLE_UBWC_HACK="${ENABLE_UBWC_HACK:-true}"
 APPLY_PATCH_SERIES="${APPLY_PATCH_SERIES:-true}"
 
 CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
@@ -280,32 +279,37 @@ PATCH_EOF
 }
 
 apply_gralloc_ubwc_fix() {
-    log_info "Applying gralloc UBWC detection fix"
+    log_info "Applying gralloc UBWC detection fix (Python)"
     local gralloc_file="${MESA_DIR}/src/util/u_gralloc/u_gralloc_fallback.c"
     [[ ! -f "$gralloc_file" ]] && return 0
-    cat << 'PATCH_EOF' > "${WORKDIR}/gralloc.patch"
-diff --git a/src/util/u_gralloc/u_gralloc_fallback.c b/src/util/u_gralloc/u_gralloc_fallback.c
-index 44fb32d8cfd..bb6459c2e29 100644
---- a/src/util/u_gralloc/u_gralloc_fallback.c
-+++ b/src/util/u_gralloc/u_gralloc_fallback.c
-@@ -148,12 +148,11 @@ fallback_gralloc_get_buffer_info(struct u_gralloc *gralloc,
-    out->strides[0] = stride;
- 
- #ifdef HAS_FREEDRENO
--   uint32_t gmsm = ('g' << 24) | ('m' << 16) | ('s' << 8) | 'm';
--   if (hnd->handle->numInts >= 2 && hnd->handle->data[hnd->handle->numFds] == gmsm) {
--      bool ubwc = hnd->handle->data[hnd->handle->numFds + 1] & 0x08000000;
--      out->modifier = ubwc ? DRM_FORMAT_MOD_QCOM_COMPRESSED : DRM_FORMAT_MOD_LINEAR;
--   }
-+   if (hnd->handle->numInts >= 2) {
-+      bool ubwc = hnd->handle->data[hnd->handle->numFds + 1] & 0x08000000;
-+      out->modifier = ubwc ? DRM_FORMAT_MOD_QCOM_COMPRESSED : DRM_FORMAT_MOD_LINEAR;
-+   }
- #endif
-    return 0;
-PATCH_EOF
-    cd "$MESA_DIR"
-    patch -p1 --fuzz=3 --ignore-whitespace < "${WORKDIR}/gralloc.patch" 2>/dev/null || log_warn "Gralloc patch may have partially applied"
+
+    python3 - "$gralloc_file" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: content = f.read()
+
+# Find the specific block and replace it
+# Target: #ifdef HAS_FREEDRENO ... #endif block inside fallback_gralloc_get_buffer_info
+old_block = r'(#ifdef HAS_FREEDRENO\s*uint32_t gmsm.*?out->modifier = ubwc \? DRM_FORMAT_MOD_QCOM_COMPRESSED : DRM_FORMAT_MOD_LINEAR;\s*}\s*#endif)'
+new_block = '''#ifdef HAS_FREEDRENO
+   if (hnd->handle->numInts >= 2) {
+      bool ubwc = hnd->handle->data[hnd->handle->numFds + 1] & 0x08000000;
+      out->modifier = ubwc ? DRM_FORMAT_MOD_QCOM_COMPRESSED : DRM_FORMAT_MOD_LINEAR;
+   }
+#endif'''
+
+if re.search(old_block, content, re.DOTALL):
+    content = re.sub(old_block, new_block, content, flags=re.DOTALL)
+    print("[OK] Gralloc UBWC block replaced")
+else:
+    # Fallback if already patched or structure changed
+    if "bool ubwc = hnd->handle->data" in content:
+        print("[INFO] Gralloc seems already patched")
+    else:
+        print("[WARN] Could not find Gralloc block to patch")
+
+with open(fp, 'w') as f: f.write(content)
+PYEOF
     log_success "Gralloc UBWC fix applied"
 }
 
@@ -374,136 +378,110 @@ apply_a6xx_query_fix() {
     find "${MESA_DIR}/src/freedreno/vulkan" -name "tu_query*.cc" -exec sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' {} \; 2>/dev/null || true
 }
 
+# Consolidated A8xx Support
+apply_a8xx_device_support() {
+    log_info "Applying A8xx device support (FD810/825/829/830)"
+    # This function is crucial for Adreno 8xx hangs
+    local devfile="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
+    local knl_kgsl="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
+    
+    # 1. UBWC 5/6
+    if [[ -f "$knl_kgsl" ]]; then
+        if ! grep -q "case 5:" "$knl_kgsl"; then
+             sed -i '/case KGSL_UBWC_4_0:/a\   case 5:\n   case 6:' "$knl_kgsl" 2>/dev/null || true
+             log_success "Added UBWC 5/6 support"
+        fi
+    fi
+    
+    # 2. Add Device IDs using Python
+    if [[ -f "$devfile" ]]; then
+        python3 - "$devfile" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: content = f.read()
+
+# We will inject the GPUProps and add_gpus calls if FD830 isn't properly defined
+if "add_gpus([\\n        GPUId(chip_id=0x44050000" not in content and "FD830" not in content:
+    # Inject new GPU definitions
+    props_code = """
+a8xx_gen1 = GPUProps(reg_size_vec4 = 96, disable_gmem = True)
+a8xx_gen2 = GPUProps(reg_size_vec4 = 128, has_salu_int_narrowing_quirk = True)
+
+a8xx_830 = GPUProps(
+    sysmem_vpc_attr_buf_size = 131072, sysmem_vpc_pos_buf_size = 65536, sysmem_vpc_bv_pos_buf_size = 32768,
+    disable_gmem = True, has_fs_tex_prefetch = False,
+)
+a8xx_825 = GPUProps(
+    sysmem_vpc_attr_buf_size = 131072, sysmem_vpc_pos_buf_size = 65536, sysmem_vpc_bv_pos_buf_size = 32768,
+)
+a8xx_810 = GPUProps(
+    sysmem_vpc_attr_buf_size = 131072, sysmem_vpc_pos_buf_size = 65536, sysmem_vpc_bv_pos_buf_size = 32768,
+    disable_gmem = True, has_ray_intersection = False, has_sw_fuse = False,
+)
+a8xx_829 = GPUProps(
+    sysmem_vpc_attr_buf_size = 131072, sysmem_vpc_pos_buf_size = 65536, sysmem_vpc_bv_pos_buf_size = 32768,
+    disable_gmem = True,
+)
+"""
+    content += "\n" + props_code
+    
+    # Inject add_gpus
+    add_gpus_code = """
+add_gpus([GPUId(chip_id=0x44050000, name="FD830"), GPUId(chip_id=0x44050001, name="FD830v2")], 
+    A6xxGPUInfo(CHIP.A8XX, [a7xx_base, a7xx_gen3, a8xx_base, a8xx_830], num_ccu=6, num_slices=3, tile_align_w=64, tile_align_h=32, tile_max_w=16384, tile_max_h=16384, num_vsc_pipes=32, cs_shared_mem_size=32*1024, wave_granularity=2, fibers_per_sp=128*2*16, raw_magic_regs=a8xx_gen2_raw_magic_regs))
+add_gpus([GPUId(chip_id=0x44030000, name="FD825")], 
+    A6xxGPUInfo(CHIP.A8XX, [a7xx_base, a7xx_gen3, a8xx_base, a8xx_825], num_ccu=4, num_slices=2, tile_align_w=64, tile_align_h=32, tile_max_w=16384, tile_max_h=16384, num_vsc_pipes=32, cs_shared_mem_size=32*1024, wave_granularity=2, fibers_per_sp=128*2*16, raw_magic_regs=a8xx_gen2_raw_magic_regs))
+add_gpus([GPUId(chip_id=0x44010000, name="FD810")], 
+    A6xxGPUInfo(CHIP.A8XX, [a7xx_base, a7xx_gen3, a8xx_base, a8xx_810], num_ccu=2, num_slices=1, tile_align_w=64, tile_align_h=32, tile_max_w=16384, tile_max_h=16384, num_vsc_pipes=32, cs_shared_mem_size=32*1024, wave_granularity=2, fibers_per_sp=128*2*16, raw_magic_regs=a8xx_gen2_raw_magic_regs))
+add_gpus([GPUId(chip_id=0x44030A00, name="FD829"), GPUId(chip_id=0x44030A20, name="FD829")], 
+    A6xxGPUInfo(CHIP.A8XX, [a7xx_base, a7xx_gen3, a8xx_base, a8xx_829], num_ccu=4, num_slices=2, tile_align_w=64, tile_align_h=32, tile_max_w=16384, tile_max_h=16384, num_vsc_pipes=32, cs_shared_mem_size=32*1024, wave_granularity=2, fibers_per_sp=128*2*16, raw_magic_regs=a8xx_gen2_raw_magic_regs))
+"""
+    content += "\n" + add_gpus_code
+    print("[OK] Injected A8xx definitions")
+else:
+    print("[INFO] A8xx definitions seem present")
+
+with open(fp, 'w') as f: f.write(content)
+PYEOF
+    fi
+    log_success "A8xx support applied"
+}
+
 apply_vulkan_extensions_support() {
     log_info "Enabling ALL Vulkan extensions and D3D features"
     local tu_device="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
     local vk_exts_py="${MESA_DIR}/src/vulkan/util/vk_extensions.py"
     [[ ! -f "$tu_device" ]] && return 0
 
-    # 1. Patch vk_extensions.py to allow all extensions
+    # 1. Patch vk_extensions.py to allow all extensions (Best effort)
     if [[ -f "$vk_exts_py" ]]; then
         python3 - "$vk_exts_py" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-n=0
-def lo(m):
-    global n; n+=1; return m.group(1)+'1'+m.group(3)
-c = re.sub(r'("VK_\w+"\s*:\s*)(\d+)(,)', lo, c)
-print(f"[OK] Lowered {n} entries to API 1")
-
-# Hardcoded list of extra extensions to ensure presence
-ALL=[
-"VK_KHR_maintenance7","VK_KHR_maintenance8","VK_KHR_maintenance9","VK_KHR_maintenance10",
+# Lower API levels
+c = re.sub(r'("VK_\w+"\s*:\s*)(\d+)(,)', lambda m: m.group(1)+'1'+m.group(3), c)
+# Append missing high-value extensions
+missing = ["VK_KHR_maintenance7","VK_KHR_maintenance8","VK_KHR_maintenance9","VK_KHR_maintenance10",
 "VK_KHR_performance_query","VK_KHR_pipeline_binary","VK_KHR_pipeline_executable_properties",
-"VK_KHR_pipeline_library","VK_KHR_portability_enumeration","VK_KHR_present_id","VK_KHR_present_id2",
-"VK_KHR_present_mode_fifo_latest_ready","VK_KHR_present_wait","VK_KHR_present_wait2",
-"VK_KHR_ray_query","VK_KHR_ray_tracing_maintenance1","VK_KHR_ray_tracing_pipeline",
-"VK_KHR_ray_tracing_position_fetch","VK_KHR_robustness2","VK_KHR_shader_bfloat16",
-"VK_KHR_shader_clock","VK_KHR_shader_fma","VK_KHR_shader_maximal_reconvergence",
-"VK_KHR_shader_quad_control","VK_KHR_shader_relaxed_extended_instruction",
-"VK_KHR_shader_subgroup_uniform_control_flow","VK_KHR_shader_untyped_pointers",
-"VK_KHR_shared_presentable_image","VK_KHR_unified_image_layouts",
-"VK_EXT_4444_formats","VK_EXT_attachment_feedback_loop_dynamic_state",
-"VK_EXT_attachment_feedback_loop_layout","VK_EXT_blend_operation_advanced",
-"VK_EXT_border_color_swizzle","VK_EXT_color_write_enable","VK_EXT_conditional_rendering",
-"VK_EXT_conservative_rasterization","VK_EXT_custom_border_color","VK_EXT_depth_bias_control",
-"VK_EXT_depth_clamp_control","VK_EXT_depth_clip_control","VK_EXT_depth_clip_enable",
-"VK_EXT_descriptor_buffer","VK_EXT_descriptor_indexing","VK_EXT_device_address_binding_report",
-"VK_EXT_device_fault","VK_EXT_device_generated_commands","VK_EXT_device_memory_report",
-"VK_EXT_discard_rectangles","VK_EXT_dynamic_rendering_unused_attachments",
-"VK_EXT_extended_dynamic_state","VK_EXT_extended_dynamic_state2","VK_EXT_extended_dynamic_state3",
-"VK_EXT_external_memory_acquire_unmodified","VK_EXT_external_memory_dma_buf",
-"VK_EXT_external_memory_host","VK_EXT_filter_cubic","VK_EXT_fragment_density_map",
-"VK_EXT_fragment_density_map2","VK_EXT_fragment_density_map_offset",
-"VK_EXT_fragment_shader_interlock","VK_EXT_frame_boundary","VK_EXT_global_priority",
-"VK_EXT_global_priority_query","VK_EXT_graphics_pipeline_library","VK_EXT_host_image_copy",
-"VK_EXT_host_query_reset","VK_EXT_image_2d_view_of_3d","VK_EXT_image_compression_control",
-"VK_EXT_image_drm_format_modifier","VK_EXT_image_robustness","VK_EXT_image_sliced_view_of_3d",
-"VK_EXT_image_view_min_lod","VK_EXT_index_type_uint8","VK_EXT_inline_uniform_block",
-"VK_EXT_legacy_dithering","VK_EXT_legacy_vertex_attributes","VK_EXT_line_rasterization",
-"VK_EXT_load_store_op_none","VK_EXT_memory_budget","VK_EXT_memory_priority","VK_EXT_mesh_shader",
-"VK_EXT_metal_objects","VK_EXT_metal_surface","VK_EXT_multi_draw",
-"VK_EXT_multisampled_render_to_single_sampled","VK_EXT_mutable_descriptor_type",
-"VK_EXT_nested_command_buffer","VK_EXT_non_seamless_cube_map","VK_EXT_opacity_micromap",
-"VK_EXT_pageable_device_local_memory","VK_EXT_pci_bus_info","VK_EXT_physical_device_drm",
-"VK_EXT_pipeline_creation_cache_control","VK_EXT_pipeline_creation_feedback",
-"VK_EXT_pipeline_library_group_handles","VK_EXT_pipeline_properties",
-"VK_EXT_pipeline_protected_access","VK_EXT_pipeline_robustness","VK_EXT_post_depth_coverage",
-"VK_EXT_present_mode_fifo_latest_ready","VK_EXT_primitive_topology_list_restart",
-"VK_EXT_primitives_generated_query","VK_EXT_provoking_vertex","VK_EXT_queue_family_foreign",
-"VK_EXT_rasterization_order_attachment_access","VK_EXT_ray_tracing_invocation_reorder",
-"VK_EXT_rgba10x6_formats","VK_EXT_sample_locations","VK_EXT_shader_64bit_indexing",
-"VK_EXT_shader_atomic_float","VK_EXT_shader_atomic_float2","VK_EXT_shader_float8",
-"VK_EXT_shader_image_atomic_int64","VK_EXT_shader_long_vector","VK_EXT_shader_module_identifier",
-"VK_EXT_shader_object","VK_EXT_shader_replicated_composites","VK_EXT_shader_stencil_export",
-"VK_EXT_shader_subgroup_partitioned","VK_EXT_shader_tile_image","VK_EXT_shader_uniform_buffer_unsized_array",
-"VK_EXT_subpass_merge_feedback","VK_EXT_swapchain_maintenance1","VK_EXT_texel_buffer_alignment",
-"VK_EXT_texture_compression_astc_3d","VK_EXT_texture_compression_astc_hdr","VK_EXT_tooling_info",
-"VK_EXT_transform_feedback","VK_EXT_vertex_attribute_divisor","VK_EXT_vertex_attribute_robustness",
-"VK_EXT_vertex_input_dynamic_state","VK_EXT_ycbcr_image_arrays","VK_EXT_zero_initialize_device_memory",
-"VK_AMD_buffer_marker","VK_AMD_device_coherent_memory","VK_AMD_draw_indirect_count",
-"VK_AMD_mixed_attachment_samples","VK_AMD_pipeline_compiler_control","VK_AMD_rasterization_order",
-"VK_AMD_shader_ballot","VK_AMD_shader_core_properties","VK_AMD_shader_core_properties2",
-"VK_AMD_shader_early_and_late_fragment_tests","VK_AMD_shader_explicit_vertex_parameter",
-"VK_AMD_shader_fragment_mask","VK_AMD_shader_image_load_store_lod","VK_AMD_shader_info",
-"VK_AMD_shader_trinary_minmax","VK_AMD_texture_gather_bias_lod",
-"VK_AMDX_shader_enqueue","VK_ANDROID_external_format_resolve","VK_ANDROID_external_memory_android_hardware_buffer",
-"VK_ARM_rasterization_order_attachment_access","VK_ARM_render_pass_striped",
-"VK_ARM_scheduling_controls","VK_ARM_shader_core_builtins","VK_ARM_shader_core_properties",
-"VK_GOOGLE_decorate_string","VK_GOOGLE_display_timing","VK_GOOGLE_hlsl_functionality1",
-"VK_GOOGLE_user_type","VK_IMG_filter_cubic","VK_IMG_relaxed_line_rasterization",
-"VK_INTEL_performance_query","VK_INTEL_shader_integer_functions2",
-"VK_MESA_image_alignment_control","VK_NV_clip_space_w_scaling","VK_NV_compute_shader_derivatives",
-"VK_NV_cooperative_matrix","VK_NV_corner_sampled_image","VK_NV_coverage_reduction_mode",
-"VK_NV_dedicated_allocation","VK_NV_dedicated_allocation_image_aliasing","VK_NV_descriptor_pool_overallocation",
-"VK_NV_device_diagnostic_checkpoints","VK_NV_device_diagnostics_config",
-"VK_NV_device_generated_commands","VK_NV_device_generated_commands_compute",
-"VK_NV_extended_sparse_address_space","VK_NV_fill_rectangle","VK_NV_fragment_coverage_to_color",
-"VK_NV_fragment_shader_barycentric","VK_NV_fragment_shading_rate_enums",
-"VK_NV_framebuffer_mixed_samples","VK_NV_geometry_shader_passthrough",
-"VK_NV_inherited_viewport_scissor","VK_NV_linear_color_attachment","VK_NV_low_latency",
-"VK_NV_low_latency2","VK_NV_memory_decompression","VK_NV_mesh_shader",
-"VK_NV_per_stage_descriptor_set","VK_NV_present_barrier","VK_NV_push_constant_bank",
-"VK_NV_raw_access_chains","VK_NV_ray_tracing","VK_NV_ray_tracing_invocation_reorder",
-"VK_NV_ray_tracing_motion_blur","VK_NV_ray_tracing_validation",
-"VK_NV_representative_fragment_test","VK_NV_sample_mask_override_coverage",
-"VK_NV_scissor_exclusive","VK_NV_shader_atomic_float16_vector","VK_NV_shader_image_footprint",
-"VK_NV_shader_sm_builtins","VK_NV_shader_subgroup_partitioned","VK_NV_shading_rate_image",
-"VK_NV_viewport_array2","VK_NV_viewport_swizzle","VK_NV_win32_keyed_mutex",
-"VK_NVX_binary_import","VK_NVX_image_view_handle","VK_NVX_multiview_per_view_attributes",
-"VK_QCOM_cooperative_matrix_conversion","VK_QCOM_filter_cubic_clamp","VK_QCOM_filter_cubic_weights",
-"VK_QCOM_fragment_density_map_offset","VK_QCOM_image_processing","VK_QCOM_image_processing2",
-"VK_QCOM_multiview_per_view_render_areas","VK_QCOM_multiview_per_view_viewports",
-"VK_QCOM_render_pass_shader_resolve","VK_QCOM_render_pass_store_ops",
-"VK_QCOM_render_pass_transform","VK_QCOM_tile_memory_heap","VK_QCOM_tile_properties",
-"VK_QCOM_tile_shading","VK_QCOM_ycbcr_degamma",
-"VK_SEC_amigo_profiling","VK_SEC_pipeline_cache_incremental_mode",
-"VK_VALVE_descriptor_set_host_mapping","VK_VALVE_fragment_density_map_layered",
-"VK_VALVE_mutable_descriptor_type","VK_VALVE_shader_mixed_float_dot_product",
-"VK_VALVE_video_encode_rgb_conversion",
-]
-known = set(re.findall(r'"(VK_[A-Z0-9_]+)"', c))
-adds = [f'    "{e}": 1,' for e in ALL if e not in known]
-if adds:
-    if '"VK_KHR_swapchain": 1,' in c:
-        c = c.replace('"VK_KHR_swapchain": 1,', '"VK_KHR_swapchain": 1,\n'+'\n'.join(adds), 1)
-    else:
-        c = re.sub(r'(\n\})\s*$','\n'+'\n'.join(adds)+r'\n}',c,count=1)
-    print(f"[OK] Added {len(adds)} extensions")
+"VK_KHR_pipeline_library","VK_KHR_present_mode_fifo_latest_ready","VK_KHR_present_wait2",
+"VK_EXT_descriptor_buffer","VK_EXT_mesh_shader","VK_EXT_opacity_micromap","VK_EXT_shader_object"]
+for ext in missing:
+    if f'"{ext}"' not in c:
+        c = c.rstrip() + f'\n    "{ext}": 1,\n'
 with open(fp,'w') as f: f.write(c)
+print(f"[OK] vk_extensions.py updated")
 PYEOF
-        log_success "vk_extensions.py patched"
     fi
 
-    # 2. Patch tu_device.cc: Force Features + Inject Extensions
-    python3 - "$tu_device" "$vk_exts_py" << 'PYEOF'
+    # 2. Patch tu_device.cc: Force Features + Inject Extensions (HARDCODED LIST)
+    # We use a hardcoded list to ensure we inject 320+ extensions regardless of vk_extensions.py structure
+    python3 - "$tu_device" << 'PYEOF'
 import sys, re
-tu_path, vk_path = sys.argv[1], sys.argv[2]
+tu_path = sys.argv[1]
 with open(tu_path) as f: content = f.read()
-with open(vk_path) as f: vk_py = f.read()
 
-# Force feature flags
+# --- PASS 1: Force Feature Flags (Critical for D3D12) ---
 feats=[
     "shaderFloat64","shaderStorageImageMultisample","uniformAndStorageBuffer16BitAccess",
     "storagePushConstant16","uniformAndStorageBuffer8BitAccess","storagePushConstant8",
@@ -536,35 +514,149 @@ feats=[
 ]
 nf=0
 for p in feats:
+    # Match p->feature = ... or .feature = ...
     new,n=re.subn(rf'((?:p|features|props|pdevice|pdev)->{re.escape(p)}\s*=\s*)([^;,\n]+)([;,\n])',r'\1true\3',content)
     if n: content=new; nf+=n
     new,n=re.subn(rf'(\.{re.escape(p)}\s*=\s*)([^;,\n]+)([;,\n])',r'\1true\3',content)
     if n: content=new; nf+=n
 print(f"[OK] Forced {nf} feature flags to true")
 
-# Inject Extension Strings
-all_exts = re.findall(r'"(VK_[A-Z0-9_]+)"\s*:\s*\d+', vk_py)
-print(f"[INFO] {len(all_exts)} entries in vk_extensions.py")
+# --- PASS 2: Inject Extension Strings (Hardcoded List) ---
+# We define the full list here to ensure 320+ extensions are injected
+ALL_EXTS = [
+"VK_KHR_16bit_storage","VK_KHR_8bit_storage","VK_KHR_acceleration_structure",
+"VK_KHR_bind_memory2","VK_KHR_buffer_device_address","VK_KHR_calibrated_timestamps",
+"VK_KHR_compute_shader_derivatives","VK_KHR_cooperative_matrix","VK_KHR_copy_commands2",
+"VK_KHR_copy_memory_indirect","VK_KHR_create_renderpass2","VK_KHR_dedicated_allocation",
+"VK_KHR_deferred_host_operations","VK_KHR_depth_clamp_zero_one","VK_KHR_depth_stencil_resolve",
+"VK_KHR_descriptor_update_template","VK_KHR_device_group","VK_KHR_draw_indirect_count",
+"VK_KHR_driver_properties","VK_KHR_dynamic_rendering","VK_KHR_dynamic_rendering_local_read",
+"VK_KHR_external_fence","VK_KHR_external_fence_fd","VK_KHR_external_memory",
+"VK_KHR_external_memory_fd","VK_KHR_external_semaphore","VK_KHR_external_semaphore_fd",
+"VK_KHR_format_feature_flags2","VK_KHR_fragment_shader_barycentric","VK_KHR_fragment_shading_rate",
+"VK_KHR_global_priority","VK_KHR_image_format_list","VK_KHR_imageless_framebuffer",
+"VK_KHR_incremental_present","VK_KHR_index_type_uint8","VK_KHR_line_rasterization",
+"VK_KHR_load_store_op_none","VK_KHR_maintenance1","VK_KHR_maintenance2","VK_KHR_maintenance3",
+"VK_KHR_maintenance4","VK_KHR_maintenance5","VK_KHR_maintenance6","VK_KHR_maintenance7",
+"VK_KHR_maintenance8","VK_KHR_maintenance9","VK_KHR_maintenance10","VK_KHR_map_memory2",
+"VK_KHR_multiview","VK_KHR_performance_query","VK_KHR_pipeline_binary",
+"VK_KHR_pipeline_executable_properties","VK_KHR_pipeline_library","VK_KHR_portability_subset",
+"VK_KHR_present_id","VK_KHR_present_id2","VK_KHR_present_mode_fifo_latest_ready",
+"VK_KHR_present_wait","VK_KHR_present_wait2","VK_KHR_push_descriptor",
+"VK_KHR_ray_query","VK_KHR_ray_tracing_maintenance1","VK_KHR_ray_tracing_pipeline",
+"VK_KHR_ray_tracing_position_fetch","VK_KHR_relaxed_block_layout","VK_KHR_robustness2",
+"VK_KHR_sampler_mirror_clamp_to_edge","VK_KHR_sampler_ycbcr_conversion",
+"VK_KHR_separate_depth_stencil_layouts","VK_KHR_shader_atomic_int64",
+"VK_KHR_shader_bfloat16","VK_KHR_shader_clock","VK_KHR_shader_draw_parameters",
+"VK_KHR_shader_expect_assume","VK_KHR_shader_float16_int8","VK_KHR_shader_float_controls",
+"VK_KHR_shader_float_controls2","VK_KHR_shader_fma","VK_KHR_shader_integer_dot_product",
+"VK_KHR_shader_maximal_reconvergence","VK_KHR_shader_non_semantic_info","VK_KHR_shader_quad_control",
+"VK_KHR_shader_relaxed_extended_instruction","VK_KHR_shader_subgroup_extended_types",
+"VK_KHR_shader_subgroup_rotate","VK_KHR_shader_subgroup_uniform_control_flow",
+"VK_KHR_shader_terminate_invocation","VK_KHR_shader_untyped_pointers",
+"VK_KHR_shared_presentable_image","VK_KHR_spirv_1_4","VK_KHR_storage_buffer_storage_class",
+"VK_KHR_swapchain","VK_KHR_swapchain_maintenance1","VK_KHR_swapchain_mutable_format",
+"VK_KHR_synchronization2","VK_KHR_timeline_semaphore","VK_KHR_uniform_buffer_standard_layout",
+"VK_KHR_unified_image_layouts","VK_KHR_variable_pointers","VK_KHR_vertex_attribute_divisor",
+"VK_KHR_video_decode_av1","VK_KHR_video_decode_h264","VK_KHR_video_decode_h265",
+"VK_KHR_video_decode_queue","VK_KHR_vulkan_memory_model","VK_KHR_workgroup_memory_explicit_layout",
+"VK_KHR_zero_initialize_workgroup_memory",
+"VK_EXT_4444_formats","VK_EXT_astc_decode_mode",
+"VK_EXT_attachment_feedback_loop_dynamic_state","VK_EXT_attachment_feedback_loop_layout",
+"VK_EXT_blend_operation_advanced","VK_EXT_border_color_swizzle","VK_EXT_buffer_device_address",
+"VK_EXT_calibrated_timestamps","VK_EXT_color_write_enable","VK_EXT_conditional_rendering",
+"VK_EXT_conservative_rasterization","VK_EXT_custom_border_color","VK_EXT_depth_bias_control",
+"VK_EXT_depth_clamp_control","VK_EXT_depth_clamp_zero_one","VK_EXT_depth_clip_control",
+"VK_EXT_depth_clip_enable","VK_EXT_depth_range_unrestricted","VK_EXT_descriptor_buffer",
+"VK_EXT_descriptor_indexing","VK_EXT_device_address_binding_report","VK_EXT_device_fault",
+"VK_EXT_device_generated_commands","VK_EXT_device_memory_report","VK_EXT_discard_rectangles",
+"VK_EXT_dynamic_rendering_unused_attachments","VK_EXT_extended_dynamic_state",
+"VK_EXT_extended_dynamic_state2","VK_EXT_extended_dynamic_state3",
+"VK_EXT_external_memory_acquire_unmodified","VK_EXT_external_memory_dma_buf",
+"VK_EXT_external_memory_host","VK_EXT_filter_cubic","VK_EXT_fragment_density_map",
+"VK_EXT_fragment_density_map2","VK_EXT_fragment_density_map_offset",
+"VK_EXT_fragment_shader_interlock","VK_EXT_frame_boundary","VK_EXT_global_priority",
+"VK_EXT_global_priority_query","VK_EXT_graphics_pipeline_library","VK_EXT_host_image_copy",
+"VK_EXT_host_query_reset","VK_EXT_image_2d_view_of_3d","VK_EXT_image_compression_control",
+"VK_EXT_image_drm_format_modifier","VK_EXT_image_robustness","VK_EXT_image_sliced_view_of_3d",
+"VK_EXT_image_view_min_lod","VK_EXT_index_type_uint8","VK_EXT_inline_uniform_block",
+"VK_EXT_legacy_dithering","VK_EXT_legacy_vertex_attributes","VK_EXT_line_rasterization",
+"VK_EXT_load_store_op_none","VK_EXT_memory_budget","VK_EXT_memory_priority","VK_EXT_mesh_shader",
+"VK_EXT_multi_draw","VK_EXT_multisampled_render_to_single_sampled","VK_EXT_mutable_descriptor_type",
+"VK_EXT_nested_command_buffer","VK_EXT_non_seamless_cube_map","VK_EXT_opacity_micromap",
+"VK_EXT_pageable_device_local_memory","VK_EXT_pci_bus_info","VK_EXT_physical_device_drm",
+"VK_EXT_pipeline_creation_cache_control","VK_EXT_pipeline_creation_feedback",
+"VK_EXT_pipeline_library_group_handles","VK_EXT_pipeline_properties",
+"VK_EXT_pipeline_protected_access","VK_EXT_pipeline_robustness","VK_EXT_post_depth_coverage",
+"VK_EXT_present_mode_fifo_latest_ready","VK_EXT_primitive_topology_list_restart",
+"VK_EXT_primitives_generated_query","VK_EXT_private_data","VK_EXT_provoking_vertex",
+"VK_EXT_queue_family_foreign","VK_EXT_rasterization_order_attachment_access",
+"VK_EXT_ray_tracing_invocation_reorder","VK_EXT_rgba10x6_formats","VK_EXT_robustness2",
+"VK_EXT_sample_locations","VK_EXT_sampler_filter_minmax","VK_EXT_scalar_block_layout",
+"VK_EXT_separate_stencil_usage","VK_EXT_shader_64bit_indexing","VK_EXT_shader_atomic_float",
+"VK_EXT_shader_atomic_float2","VK_EXT_shader_demote_to_helper_invocation","VK_EXT_shader_float8",
+"VK_EXT_shader_image_atomic_int64","VK_EXT_shader_long_vector","VK_EXT_shader_module_identifier",
+"VK_EXT_shader_object","VK_EXT_shader_replicated_composites","VK_EXT_shader_stencil_export",
+"VK_EXT_shader_subgroup_partitioned","VK_EXT_shader_tile_image","VK_EXT_shader_viewport_index_layer",
+"VK_EXT_subgroup_size_control","VK_EXT_subpass_merge_feedback","VK_EXT_swapchain_maintenance1",
+"VK_EXT_texel_buffer_alignment","VK_EXT_texture_compression_astc_3d","VK_EXT_texture_compression_astc_hdr",
+"VK_EXT_tooling_info","VK_EXT_transform_feedback","VK_EXT_vertex_attribute_divisor",
+"VK_EXT_vertex_attribute_robustness","VK_EXT_vertex_input_dynamic_state",
+"VK_EXT_ycbcr_2plane_444_formats","VK_EXT_ycbcr_image_arrays","VK_EXT_zero_initialize_device_memory",
+"VK_AMD_buffer_marker","VK_AMD_device_coherent_memory","VK_AMD_draw_indirect_count",
+"VK_AMD_gcn_shader","VK_AMD_gpu_shader_half_float","VK_AMD_gpu_shader_int16",
+"VK_AMD_mixed_attachment_samples","VK_AMD_negative_viewport_height",
+"VK_AMD_pipeline_compiler_control","VK_AMD_rasterization_order","VK_AMD_shader_ballot",
+"VK_AMD_shader_core_properties","VK_AMD_shader_core_properties2",
+"VK_AMD_shader_early_and_late_fragment_tests","VK_AMD_shader_explicit_vertex_parameter",
+"VK_AMD_shader_fragment_mask","VK_AMD_shader_image_load_store_lod","VK_AMD_shader_info",
+"VK_AMD_shader_trinary_minmax","VK_AMD_texture_gather_bias_lod",
+"VK_ANDROID_external_format_resolve","VK_ANDROID_external_memory_android_hardware_buffer",
+"VK_ARM_rasterization_order_attachment_access","VK_ARM_render_pass_striped",
+"VK_ARM_scheduling_controls","VK_ARM_shader_core_builtins","VK_ARM_shader_core_properties",
+"VK_GOOGLE_decorate_string","VK_GOOGLE_display_timing","VK_GOOGLE_hlsl_functionality1",
+"VK_GOOGLE_user_type","VK_IMG_filter_cubic","VK_IMG_relaxed_line_rasterization",
+"VK_INTEL_performance_query","VK_INTEL_shader_integer_functions2",
+"VK_MESA_image_alignment_control","VK_NV_clip_space_w_scaling",
+"VK_NV_compute_shader_derivatives","VK_NV_cooperative_matrix","VK_NV_corner_sampled_image",
+"VK_NV_coverage_reduction_mode","VK_NV_dedicated_allocation",
+"VK_NV_dedicated_allocation_image_aliasing","VK_NV_descriptor_pool_overallocation",
+"VK_NV_device_diagnostic_checkpoints","VK_NV_device_diagnostics_config",
+"VK_NV_device_generated_commands","VK_NV_device_generated_commands_compute",
+"VK_NV_extended_sparse_address_space","VK_NV_fill_rectangle",
+"VK_NV_fragment_coverage_to_color","VK_NV_fragment_shader_barycentric",
+"VK_NV_fragment_shading_rate_enums","VK_NV_framebuffer_mixed_samples",
+"VK_NV_geometry_shader_passthrough","VK_NV_inherited_viewport_scissor",
+"VK_NV_linear_color_attachment","VK_NV_low_latency","VK_NV_low_latency2",
+"VK_NV_memory_decompression","VK_NV_mesh_shader","VK_NV_optical_flow",
+"VK_NV_partitioned_acceleration_structure","VK_NV_per_stage_descriptor_set",
+"VK_NV_present_barrier","VK_NV_push_constant_bank","VK_NV_raw_access_chains",
+"VK_NV_ray_tracing","VK_NV_ray_tracing_invocation_reorder","VK_NV_ray_tracing_motion_blur",
+"VK_NV_ray_tracing_validation","VK_NV_representative_fragment_test",
+"VK_NV_sample_mask_override_coverage","VK_NV_scissor_exclusive",
+"VK_NV_shader_atomic_float16_vector","VK_NV_shader_image_footprint",
+"VK_NV_shader_sm_builtins","VK_NV_shader_subgroup_partitioned",
+"VK_NV_shading_rate_image","VK_NV_viewport_array2","VK_NV_viewport_swizzle",
+"VK_NV_win32_keyed_mutex","VK_NVX_binary_import","VK_NVX_image_view_handle",
+"VK_NVX_multiview_per_view_attributes",
+"VK_QCOM_fragment_density_map_offset","VK_QCOM_image_processing",
+"VK_QCOM_multiview_per_view_render_areas","VK_QCOM_multiview_per_view_viewports",
+"VK_QCOM_render_pass_shader_resolve","VK_QCOM_render_pass_store_ops",
+"VK_QCOM_render_pass_transform","VK_QCOM_tile_properties","VK_QCOM_ycbcr_degamma",
+"VK_SEC_amigo_profiling","VK_VALVE_descriptor_set_host_mapping",
+"VK_VALVE_mutable_descriptor_type","VK_VALVE_shader_mixed_float_dot_product",
+]
 
+# Filter out instance-only extensions (we only want device extensions)
 INST_ONLY={
-"VK_KHR_surface","VK_KHR_surface_maintenance1","VK_KHR_surface_protected_capabilities",
-"VK_KHR_get_surface_capabilities2","VK_KHR_android_surface","VK_KHR_display",
-"VK_KHR_display_swapchain","VK_KHR_get_display_properties2","VK_KHR_wayland_surface",
-"VK_KHR_win32_surface","VK_KHR_xcb_surface","VK_KHR_xlib_surface",
-"VK_KHR_portability_enumeration","VK_EXT_acquire_drm_display","VK_EXT_acquire_xlib_display",
-"VK_EXT_debug_report","VK_EXT_debug_utils","VK_EXT_direct_mode_display",
-"VK_EXT_directfb_surface","VK_EXT_display_control","VK_EXT_display_surface_counter",
-"VK_EXT_full_screen_exclusive","VK_EXT_headless_surface","VK_EXT_layer_settings",
-"VK_EXT_metal_surface","VK_EXT_surface_maintenance1","VK_EXT_swapchain_colorspace",
-"VK_EXT_hdr_metadata","VK_EXT_present_timing","VK_FUCHSIA_imagepipe_surface",
-"VK_GGP_stream_descriptor_surface","VK_GOOGLE_surfaceless_query",
-"VK_LUNARG_direct_driver_loading","VK_MVK_ios_surface","VK_MVK_macos_surface",
-"VK_NN_vi_surface","VK_NV_acquire_winrt_display","VK_NV_display_stereo",
-"VK_OHOS_surface","VK_QNX_screen_surface","VK_SEC_ubm_surface","VK_OHOS_external_memory",
+"VK_KHR_surface","VK_KHR_wayland_surface","VK_KHR_win32_surface","VK_KHR_xcb_surface",
+"VK_KHR_xlib_surface","VK_EXT_debug_report","VK_EXT_debug_utils","VK_EXT_headless_surface",
+"VK_KHR_android_surface","VK_KHR_display","VK_MVK_ios_surface","VK_MVK_macos_surface",
 }
-dev_exts=[e for e in all_exts if e not in INST_ONLY]
-print(f"[INFO] {len(dev_exts)} device extensions to inject")
+dev_exts=[e for e in ALL_EXTS if e not in INST_ONLY]
+print(f"[INFO] Injecting {len(dev_exts)} device extensions")
 
+# Find injection point
 def find_point(text):
     for pat in [
         r'tu_get_device_extensions\s*\([^{]*?struct\s+vk_device_extension_table\s*\*\s*(\w+)',
@@ -582,225 +674,24 @@ def find_point(text):
                 elif text[p]=='}': d-=1
                 p+=1
             return ev,p-1
-    last=None
-    for m in re.finditer(r'(\w+)->(KHR|EXT|AMD|VALVE|QCOM|MESA|GOOGLE|HUAWEI|ARM|SEC|NV|INTEL|IMG|ANDROID)\w+\s*=\s*(?:true|false)\s*;',text):
-        last=m
-    if last: return last.group(1),last.end()
-    return None
+    return None, None
 
-r=find_point(content)
-if r is None:
-    print("[WARN] No injection point found")
-else:
-    ev,ins=r
-    print(f"[OK] ext_var='{ev}', injecting {len(dev_exts)} extensions")
-    lines=["\n    // === ALL VULKAN EXTENSIONS INJECTED ==="]
+ev, ins = find_point(content)
+if ev:
+    print(f"[OK] ext_var='{ev}'")
+    lines=["\n    // === ALL VULKAN EXTENSIONS FORCED (320+) ==="]
     for e in dev_exts:
-        lines.append(f"    {ev}->{e[3:]} = true;")  # strip VK_ prefix
+        lines.append(f"    {ev}->{e[3:]} = true;")  # strip VK_
     lines.append("    // === END ===\n")
     inj="\n".join(lines)
     content=content[:ins]+inj+content[ins:]
     print(f"[OK] Done — {len(dev_exts)} assignments written")
+else:
+    print("[ERROR] Could not find injection point")
 
 with open(tu_path,'w') as f: f.write(content)
 PYEOF
     log_success "Vulkan extensions support applied"
-}
-
-# Consolidated A8xx Support
-apply_a8xx_device_support() {
-    log_info "Applying A8xx device support patches (FD810/825/829/830)"
-    local devfile="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
-    local knl_kgsl="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
-    local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
-    local fd_gmem="${MESA_DIR}/src/freedreno/common/fd6_gmem_cache.h"
-    local dev_info="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"
-    local tu_cmd="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
-    
-    # 1. Patch UBWC 5/6 in kgsl
-    if [[ -f "$knl_kgsl" ]]; then
-        if ! grep -q "case 5:" "$knl_kgsl"; then
-             sed -i '/case KGSL_UBWC_4_0:/a\   case 5:\n   case 6:' "$knl_kgsl" 2>/dev/null || true
-             log_success "Added UBWC 5/6 support"
-        fi
-    fi
-    
-    # 2. Add disable_gmem property to header
-    if [[ -f "$dev_info" ]]; then
-        if ! grep -q "disable_gmem" "$dev_info"; then
-            sed -i '/bool has_salu_int_narrowing_quirk;/a\      bool disable_gmem;' "$dev_info"
-            log_success "Added disable_gmem to dev_info.h"
-        fi
-    fi
-
-    # 3. Add check in tu_cmd_buffer.cc
-    if [[ -f "$tu_cmd" ]]; then
-        if ! grep -q "disable_gmem" "$tu_cmd"; then
-            # Insert after the first return true; in use_sysmem_rendering
-            sed -i '/return true;/a\   if (cmd->device->physical_device->dev_info.props.disable_gmem) return true;' "$tu_cmd"
-            log_success "Added disable_gmem check to tu_cmd_buffer.cc"
-        fi
-    fi
-
-    # 4. GMEM Cache fix for A810
-    if [[ -f "$fd_gmem" ]]; then
-        sed -i 's/if (info->chip >= 8)/if (info->chip >= 8 \&\& info->num_slices > 1)/g' "$fd_gmem"
-        log_success "Patched fd6_gmem_cache.h for slice check"
-    fi
-
-    # 5. Add Device IDs and Props using Python
-    python3 - "$devfile" << 'PYEOF'
-import sys, re
-
-fp = sys.argv[1]
-with open(fp) as f: content = f.read()
-
-# Define A8xx props templates
-props_code = """
-# --- A8xx Gen Props Added by Script ---
-a8xx_gen1 = GPUProps(
-        reg_size_vec4 = 96,
-        disable_gmem = True,
-        )
-
-a8xx_gen2 = GPUProps(
-        reg_size_vec4 = 128,
-        sysmem_vpc_attr_buf_size = 131072,
-        sysmem_vpc_pos_buf_size = 65536,
-        sysmem_vpc_bv_pos_buf_size = 32768,
-        has_salu_int_narrowing_quirk = True
-)
-
-a8xx_830 = GPUProps(
-        sysmem_vpc_attr_buf_size = 131072,
-        sysmem_vpc_pos_buf_size = 65536,
-        sysmem_vpc_bv_pos_buf_size = 32768,
-        sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
-        sysmem_per_ccu_color_cache_size = 128 * 1024,
-        sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
-        sysmem_per_ccu_depth_cache_size = 192 * 1024,
-        gmem_vpc_attr_buf_size = 49152,
-        gmem_vpc_pos_buf_size = 24576,
-        gmem_vpc_bv_pos_buf_size = 32768,
-        gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,
-        gmem_per_ccu_color_cache_size = 16 * 1024,
-        gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,
-        gmem_per_ccu_depth_cache_size = 256 * 1024,
-        has_fs_tex_prefetch = False,
-        disable_gmem = True,
-)
-
-a8xx_825 = GPUProps(
-        sysmem_vpc_attr_buf_size = 131072,
-        sysmem_vpc_pos_buf_size = 65536,
-        sysmem_vpc_bv_pos_buf_size = 32768,
-        sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
-        sysmem_per_ccu_color_cache_size = 128 * 1024,
-        sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
-        sysmem_per_ccu_depth_cache_size = 96 * 1024,
-        gmem_vpc_attr_buf_size = 49152,
-        gmem_vpc_pos_buf_size = 24576,
-        gmem_vpc_bv_pos_buf_size = 32768,
-        gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,
-        gmem_per_ccu_color_cache_size = 16 * 1024,
-        gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,
-        gmem_per_ccu_depth_cache_size = 127 * 1024,
-)
-
-a8xx_810 = GPUProps(
-        sysmem_vpc_attr_buf_size = 131072,
-        sysmem_vpc_pos_buf_size = 65536,
-        sysmem_vpc_bv_pos_buf_size = 32768,
-        sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
-        sysmem_per_ccu_color_cache_size = 32 * 1024,
-        sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
-        sysmem_per_ccu_depth_cache_size = 32 * 1024,
-        gmem_vpc_attr_buf_size = 49152,
-        gmem_vpc_pos_buf_size = 24576,
-        gmem_vpc_bv_pos_buf_size = 32768,
-        gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,
-        gmem_per_ccu_color_cache_size = 16 * 1024,
-        gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,
-        gmem_per_ccu_depth_cache_size = 64 * 1024,
-        has_ray_intersection = False,
-        has_sw_fuse = False,
-        disable_gmem = True,
-)
-
-a8xx_829 = GPUProps(
-        sysmem_vpc_attr_buf_size = 131072,
-        sysmem_vpc_pos_buf_size = 65536,
-        sysmem_vpc_bv_pos_buf_size = 32768,
-        sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
-        sysmem_per_ccu_color_cache_size = 128 * 1024,
-        sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
-        sysmem_per_ccu_depth_cache_size = 96 * 1024,
-        gmem_vpc_attr_buf_size = 49152,
-        gmem_vpc_pos_buf_size = 24576,
-        gmem_vpc_bv_pos_buf_size = 32768,
-        gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,
-        gmem_per_ccu_color_cache_size = 16 * 1024,
-        gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,
-        gmem_per_ccu_depth_cache_size = 127 * 1024,
-        disable_gmem = True,
-)
-
-"""
-
-# Insert Props near the end or before add_gpus calls
-if "a8xx_830 = GPUProps" not in content:
-    # Find a safe insertion point (e.g., end of file or before the last add_gpus)
-    # We'll just append it for safety if not found
-    content += "\n" + props_code
-    print("[OK] Appended A8xx Props")
-
-# Helper to add GPU IDs
-def add_gpu(cid, name, props_var, num_ccu, num_slices):
-    return f"""
-add_gpus([
-        GPUId(chip_id={cid}, name="{name}"),
-    ], A6xxGPUInfo(
-        CHIP.A8XX,
-        [a7xx_base, a7xx_gen3, a8xx_base, {props_var}],
-        num_ccu = {num_ccu},
-        num_slices = {num_slices},
-        tile_align_w = 64,
-        tile_align_h = 32,
-        tile_max_w = 16384,
-        tile_max_h = 16384,
-        num_vsc_pipes = 32,
-        cs_shared_mem_size = 32 * 1024,
-        wave_granularity = 2,
-        fibers_per_sp = 128 * 2 * 16,
-        magic_regs = dict(),
-        raw_magic_regs = a8xx_gen2_raw_magic_regs,
-    ))
-"""
-
-# Inject add_gpus calls
-# Find the original FD830 add_gpus and replace/extend it
-pattern = r'add_gpus\(\[\s*GPUId\(chip_id=0x44050000, name="FD830"\),\s*\], A6xxGPUInfo\('
-replacement = add_gpu("0x44050000", "FD830", "a8xx_830", 6, 3) + \
-              add_gpu("0x44050001", "FD830v2", "a8xx_830", 6, 3) + \
-              add_gpu("0x44030000", "FD825", "a8xx_825", 4, 2) + \
-              add_gpu("0x44010000", "FD810", "a8xx_810", 2, 1) + \
-              add_gpu("0x44030A00", "FD829", "a8xx_829", 4, 2) + \
-              add_gpu("0x44030A20", "FD829", "a8xx_829", 4, 2)
-
-if "FD810" not in content:
-    if re.search(pattern, content):
-        content = re.sub(pattern, replacement, content)
-        print("[OK] Replaced/Extended A8xx device IDs")
-    else:
-        # Just append if pattern not found
-        content += replacement
-        print("[OK] Appended A8xx device IDs")
-
-with open(fp, 'w') as f:
-    f.write(content)
-
-PYEOF
-    log_success "A8xx support applied"
 }
 
 apply_patches() {
@@ -816,15 +707,12 @@ apply_patches() {
         apply_patch_series "$PATCHES_DIR/series"
     else
         if [[ "$ENABLE_TIMELINE_HACK" == "true" ]]; then apply_timeline_semaphore_fix; fi
-        if [[ "$ENABLE_UBWC_HACK" == "true" ]]; then true; fi # Handled in A8xx support
         apply_gralloc_ubwc_fix
         if [[ "$ENABLE_DECK_EMU" == "true" ]]; then apply_deck_emu_support; fi
         if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then apply_vulkan_extensions_support; fi
         
-        # Apply A8xx patches if target is a8xx or generally for newer devices
-        if [[ "$TARGET_GPU" == "a8xx" ]]; then
-            apply_a8xx_device_support
-        fi
+        # Apply A8xx support unconditionally for newer drivers to prevent hangs
+        apply_a8xx_device_support
         
         if [[ "$BUILD_VARIANT" == "autotuner" ]]; then apply_a6xx_query_fix; fi
     fi
@@ -833,9 +721,6 @@ apply_patches() {
         for patch in "$PATCHES_DIR"/*.patch; do
             [[ ! -f "$patch" ]] && continue
             local patch_name=$(basename "$patch")
-            if [[ "$patch_name" == *"a8xx"* ]] || [[ "$patch_name" == *"A8xx"* ]]; then
-                if [[ "$TARGET_GPU" != "a8xx" ]]; then continue; fi
-            fi
             log_info "Applying: $patch_name"
             if git apply --check "$patch" 2>/dev/null; then
                 git apply "$patch"
@@ -963,7 +848,8 @@ package_driver() {
     local build_date=$(date +'%Y-%m-%d')
     local driver_src="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
     local pkg_dir="${WORKDIR}/package"
-
+    
+    # Naming Logic: ad07xx, ad08xx
     local name_suffix="${TARGET_GPU:1}"
     local driver_name="vulkan.ad0${name_suffix}.so"
 
@@ -989,8 +875,8 @@ package_driver() {
 {
     "schemaVersion": 1,
     "name": "Turnip ${TARGET_GPU} ${BUILD_VARIANT}",
-    "description": "TurnipDriver with extensions/spoofing for Winlator",
-    "author": "Blue",
+    "description": "TurnipDriver",
+    "author": "Blueinstruction",
     "packageVersion": "1",
     "vendor": "Mesa",
     "driverVersion": "${vulkan_version}",
