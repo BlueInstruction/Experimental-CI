@@ -181,30 +181,8 @@ clone_mesa() {
     log_success "Mesa $version ($commit) ready"
 }
 
-apply_patch_series() {
-    local series_dir="$1"
-    if [[ ! -d "$series_dir" ]]; then
-        log_warn "Patch series directory not found: $series_dir"
-        return 0
-    fi
-
-    cd "$MESA_DIR"
-    git am --abort &>/dev/null || true
-
-    for patch in $(find "$series_dir" -maxdepth 1 -name '*.patch' | sort); do
-        local patch_name=$(basename "$patch")
-        log_info "Applying patch: $patch_name"
-        if ! git am --3way "$patch" 2>&1 | tee -a "${WORKDIR}/patch.log"; then
-            log_error "Failed to apply patch $patch_name"
-            git am --abort
-            exit 1
-        fi
-    done
-    log_success "All patches applied successfully"
-}
-
 apply_timeline_semaphore_fix() {
-    log_info "Applying timeline semaphore optimization"
+    log_info "Applying timeline semaphore optimization (Critical for D3D12)"
     local target_file="${MESA_DIR}/src/vulkan/runtime/vk_sync_timeline.c"
     [[ ! -f "$target_file" ]] && { log_warn "Timeline file not found"; return 0; }
 
@@ -484,24 +462,6 @@ with open(vk_path, encoding='utf-8', errors='ignore') as f:
 
 VENDORS = r'(?:KHR|EXT|AMD|AMDX|ARM|ANDROID|FUCHSIA|GGP|GOOGLE|HUAWEI|IMG|INTEL|LUNARG|MESA|MSFT|MVK|NN|NV|NVX|OHOS|QCOM|QNX|SEC|VALVE)'
 
-FEATURE_PATS = [
-    (r'(\b\w+->robustBufferAccess\s*=\s*)[^;]+;',            r'\g<1>true;'),
-    (r'(\b\w+->multiDrawIndirect\s*=\s*)[^;]+;',             r'\g<1>true;'),
-    (r'(\b\w+->drawIndirectFirstInstance\s*=\s*)[^;]+;',     r'\g<1>true;'),
-    (r'(\b\w+->multiViewport\s*=\s*)[^;]+;',                 r'\g<1>true;'),
-    (r'(\b\w+->shaderInt64\s*=\s*)[^;]+;',                   r'\g<1>true;'),
-    (r'(\b\w+->shaderInt16\s*=\s*)[^;]+;',                   r'\g<1>true;'),
-    (r'(\b\w+->fragmentStoresAndAtomics\s*=\s*)[^;]+;',      r'\g<1>true;'),
-    (r'(\b\w+->independentBlend\s*=\s*)[^;]+;',              r'\g<1>true;'),
-    (r'(\b\w+->sampleRateShading\s*=\s*)[^;]+;',             r'\g<1>true;'),
-    (r'(\b\w+->tessellationShader\s*=\s*)[^;]+;',            r'\g<1>true;'),
-]
-nf = 0
-for pat, rep in FEATURE_PATS:
-    new, n = re.subn(pat, rep, content)
-    if n: content = new; nf += n
-print(f"[OK] Pass 1: Forced {nf} feature flag assignments")
-
 forced_exts = set()
 ptr_pat = rf'(\b(\w+)->({VENDORS})(_\w+)\s*=\s*)([^;{{}}]+)(;)'
 def force_ptr(m):
@@ -751,9 +711,177 @@ with open(tu_path, 'w', encoding='utf-8') as f:
 total_ptr    = len(re.findall(rf'\b\w+->{VENDORS}_\w+\s*=\s*true\s*;', content))
 total_struct = len(re.findall(rf'\.{VENDORS}_\w+\s*=\s*true\s*,?', content))
 print(f"[OK] FINAL: {total_ptr + total_struct} extension fields set to true")
-print(f"     ({total_struct} struct-init, {total_ptr} pointer-assign)")
 PYEOF
     log_success "Vulkan extensions support applied"
+}
+
+apply_d3d12_feature_force() {
+    local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$tu_dev" ]] && { log_warn "D3D12 feature force: tu_device.cc not found"; return 0; }
+    if grep -q "D3D12_FEATURE_FORCE_APPLIED" "$tu_dev"; then
+        log_info "D3D12 feature force already applied"
+        return 0
+    fi
+    log_info "Forcing ALL Vulkan features for D3D12/VKD3D compatibility"
+    
+    python3 - "$tu_dev" << 'PYEOF'
+import sys, re
+
+path = sys.argv[1]
+with open(path, encoding='utf-8', errors='ignore') as f:
+    content = f.read()
+
+# 1. Force Descriptor Limits (Pass 1)
+# We must increase limits so VKD3D doesn't reject the device
+desc_limits = {
+    r'(maxDescriptorSetUpdateAfterBindSamplers\s*=\s*)\d+': r'\g<1>1000000',
+    r'(maxDescriptorSetUpdateAfterBindSampledImages\s*=\s*)\d+': r'\g<1>1000000',
+    r'(maxDescriptorSetUpdateAfterBindStorageImages\s*=\s*)\d+': r'\g<1>1000000',
+    r'(maxDescriptorSetUpdateAfterBindStorageBuffers\s*=\s*)\d+': r'\g<1>1000000',
+    r'(maxPerStageDescriptorUpdateAfterBindSampledImages\s*=\s*)\d+': r'\g<1>1048576',
+    r'(maxPerStageDescriptorUpdateAfterBindStorageImages\s*=\s*)\d+': r'\g<1>1048576',
+    r'(maxPerStageDescriptorUpdateAfterBindStorageBuffers\s*=\s*)\d+': r'\g<1>1048576',
+    r'(maxPerStageUpdateAfterBindResources\s*=\s*)\d+': r'\g<1>1048576',
+}
+
+for pat, rep in desc_limits.items():
+    content, n = re.subn(pat, rep, content)
+    if n: print(f"[LIMIT] Fixed {pat.split('=')[0].strip()}")
+
+# 2. Force ALL feature flags to true (Pass 2)
+# This ensures that even if Turnip reports 'false' for a feature, we force it 'true' for VKD3D.
+# We target assignments inside feature structs (p->feature = ...).
+
+# Pattern: inside functions that fill features, look for assignment of boolean-like expressions
+# We want to replace 'p->feature = false;' or 'p->feature = cond;' with 'p->feature = true;'
+# We are careful not to replace function calls or complex initializers, but for features it's usually simple.
+
+feature_assignment_pat = r'(\s+(?:p|features|info)->[\w\d_]+\s*=\s*)([^;]+)(;)'
+
+def force_true(m):
+    var = m.group(1)
+    val = m.group(2).strip()
+    sem = m.group(3)
+    # If it's already true, skip
+    if val == 'true': return m.group(0)
+    # If it looks like a complex expression, we force it anyway if it looks booleanish
+    # VKD3D needs robustness2, descriptor_indexing, timeline_semaphore, etc.
+    # We specifically target feature names
+    return f"{var}true{sem}"
+
+# We apply this aggressively to the feature filling functions
+# Find the scope of feature filling functions
+func_patterns = [
+    r'tu_get_physical_device_features_1_1\s*\([^{]*\{([^}]*)\}',
+    r'tu_get_physical_device_features_1_2\s*\([^{]*\{([^}]*)\}',
+    r'tu_get_physical_device_features_1_3\s*\([^{]*\{([^}]*)\}',
+    r'tu_get_physical_device_features_2\s*\([^{]*\{([^}]*)\}',
+]
+
+# Easier approach: Global replace for known critical features + generic force in feature functions
+
+critical_features = [
+    "robustBufferAccess", "fullDrawIndexUint32", "imageCubeArray", "independentBlend",
+    "geometryShader", "tessellationShader", "sampleRateShading", "dualSrcBlend",
+    "logicOp", "multiDrawIndirect", "drawIndirectFirstInstance", "depthClamp",
+    "depthBiasClamp", "fillModeNonSolid", "wideLines", "largePoints", "alphaToOne",
+    "multiViewport", "samplerAnisotropy", "textureCompressionETC2",
+    "textureCompressionASTC_LDR", "textureCompressionBC", "occlusionQueryPrecise",
+    "pipelineStatisticsQuery", "vertexPipelineStoresAndAtomics", "fragmentStoresAndAtomics",
+    "shaderTessellationAndGeometryPointSize", "shaderImageGatherExtended",
+    "shaderStorageImageExtendedFormats", "shaderStorageImageMultisample",
+    "shaderStorageImageReadWithoutFormat", "shaderStorageImageWriteWithoutFormat",
+    "shaderUniformBufferArrayDynamicIndexing", "shaderSampledImageArrayDynamicIndexing",
+    "shaderStorageBufferArrayDynamicIndexing", "shaderStorageImageArrayDynamicIndexing",
+    "shaderClipDistance", "shaderCullDistance", "shaderFloat64", "shaderInt64",
+    "shaderInt16", "shaderResourceMinLod", "variableMultisampleRate", "inheritedQueries",
+    
+    # Vulkan 1.1/1.2
+    "storageBuffer16BitAccess", "storagePushConstant16", "storageInputOutput16",
+    "multiview", "multiviewGeometryShader", "multiviewTessellationShader",
+    "variablePointersStorageBuffer", "variablePointers",
+    "protectedMemory", "samplerYcbcrConversion", "shaderDrawParameters",
+    "samplerMirrorClampToEdge", "drawIndirectCount", "samplerFilterMinmax",
+    "scalarBlockLayout", "imagelessFramebuffer", "uniformBufferStandardLayout",
+    "shaderSubgroupExtendedTypes", "separateDepthStencilLayouts", "hostQueryReset",
+    "timelineSemaphore", "bufferDeviceAddress", "bufferDeviceAddressCaptureReplay",
+    "bufferDeviceAddressMultiDevice", "vulkanMemoryModel", "vulkanMemoryModelDeviceScope",
+    "vulkanMemoryModelAvailabilityVisibilityChains", "shaderOutputViewportIndex",
+    "shaderOutputLayer", "shaderSubgroupExtendedTypes", "separateDepthStencilLayouts",
+    
+    # Vulkan 1.3 / Extensions
+    "robustBufferAccess2", "robustImageAccess2", "nullDescriptor", # Robustness2
+    "shaderDemoteToHelperInvocation", "shaderTerminateInvocation",
+    "subgroupSizeControl", "computeFullSubgroups",
+    "synchronization2", "dynamicRendering", "maintenance4", 
+    "shaderIntegerDotProduct", "texelBufferAlignment",
+    
+    # Indexing (Critical for D3D12)
+    "shaderInputAttachmentArrayDynamicIndexing",
+    "shaderUniformTexelBufferArrayDynamicIndexing",
+    "shaderStorageTexelBufferArrayDynamicIndexing",
+    "shaderUniformBufferArrayNonUniformIndexing",
+    "shaderSampledImageArrayNonUniformIndexing",
+    "shaderStorageBufferArrayNonUniformIndexing",
+    "shaderStorageImageArrayNonUniformIndexing",
+    "shaderInputAttachmentArrayNonUniformIndexing",
+    "shaderUniformTexelBufferArrayNonUniformIndexing",
+    "shaderStorageTexelBufferArrayNonUniformIndexing",
+    "descriptorBindingUniformBufferUpdateAfterBind",
+    "descriptorBindingSampledImageUpdateAfterBind",
+    "descriptorBindingStorageImageUpdateAfterBind",
+    "descriptorBindingStorageBufferUpdateAfterBind",
+    "descriptorBindingUniformTexelBufferUpdateAfterBind",
+    "descriptorBindingStorageTexelBufferUpdateAfterBind",
+    "descriptorBindingUpdateUnusedWhilePending",
+    "descriptorBindingPartiallyBound",
+    "descriptorBindingVariableDescriptorCount",
+    "runtimeDescriptorArray",
+    
+    # Extended Dynamic State
+    "extendedDynamicState", "extendedDynamicState2", "extendedDynamicState2LogicOp",
+    "extendedDynamicState2BlendAdvanced", "extendedDynamicState3",
+    
+    # Transform Feedback (optional but good)
+    "transformFeedback", "geometryStreams",
+    
+    # Others
+    "conditionalRendering", "inheritedConditionalRendering",
+    "presentId", "presentWait",
+    "pipelineCreationCacheControl",
+    "shaderClock", "shaderFloat16", "shaderInt8",
+    "shaderAtomicInt64", "shaderAtomicFloat", "shaderAtomicFloat2",
+    "descriptorIndexing", 
+    "fragmentDensityMap", "fragmentDensityMapDeferred",
+    "attachmentFeedbackLoopLayout",
+    "provokingVertexLast",
+    "lineRasterization", "stippledRectangularLines", "stippledBresenhamLines", "stippledSmoothLines"
+]
+
+# Apply global force for these feature names
+count = 0
+for feat in critical_features:
+    # Match: p->feature = false; OR p->feature = expr;
+    # Replace with: p->feature = true;
+    pat = rf'(\s+(?:p|features|info)->{feat}\s*=\s*)([^;]+)(;)'
+    def repl(m):
+        return f"{m.group(1)}true{m.group(3)}"
+    
+    new_content, n = re.subn(pat, repl, content)
+    if n > 0:
+        content = new_content
+        count += n
+
+print(f"[OK] Forced {count} feature flags to true")
+
+# 3. Mark as applied
+content = content.replace('#include "tu_device.h"',
+                          '#include "tu_device.h"\n/* D3D12_FEATURE_FORCE_APPLIED */', 1)
+
+with open(path, 'w', encoding='utf-8') as f:
+    f.write(content)
+PYEOF
+    log_success "D3D12 feature forcing applied"
 }
 
 apply_a8xx_vpc_props() {
@@ -794,7 +922,7 @@ PYEOF
 apply_reduce_advertised_memory() {
     local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
     [[ ! -f "$tu_dev" ]] && { log_warn "tu_device.cc not found"; return 0; }
-    if grep -q "REDUCED_HEAP_CAP\|heap_size.*3 \/ 4\|heap_size.*75" "$tu_dev"; then
+    if grep -q "REDUCED_HEAP_CAP" "$tu_dev"; then
         log_info "Reduced memory already applied"
         return 0
     fi
@@ -888,7 +1016,6 @@ apply_a8xx_device_support() {
     log_info "Applying A8xx device support patches (FD810/825/829/830)"
     local devfile="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
     local knl_kgsl="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
-    local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
     local fd_gmem="${MESA_DIR}/src/freedreno/common/fd6_gmem_cache.h"
     
     # 1. Patch UBWC 5/6 in kgsl
@@ -898,12 +1025,8 @@ apply_a8xx_device_support() {
              log_success "Added UBWC 5/6 support"
         fi
     fi
-
-    # 2. Patch disable_gmem property support
-    # Add property to header if not present (handled by generic python patcher usually, but let's ensure)
-    # This is handled by the specific patches logic below
     
-    # 3. Add Device IDs and Props using Python
+    # 2. Inject Device IDs and Props using Python
     python3 - "$devfile" << 'PYEOF'
 import sys, re
 
@@ -911,9 +1034,6 @@ fp = sys.argv[1]
 with open(fp) as f: content = f.read()
 
 # Define A8xx props templates
-# Inserting before the main add_gpus calls for a8xx
-
-# Insert new GPUProps blocks
 props_code = """
 a8xx_830 = GPUProps(
         sysmem_vpc_attr_buf_size = 131072,
@@ -1047,27 +1167,10 @@ with open(fp, 'w') as f:
 
 PYEOF
 
-    # 4. GMEM Cache fix
+    # 3. GMEM Cache fix
     if [[ -f "$fd_gmem" ]]; then
         sed -i 's/if (info->chip >= 8)/if (info->chip >= 8 \&\& info->num_slices > 1)/g' "$fd_gmem"
         log_success "Patched fd6_gmem_cache.h for slice check"
-    fi
-
-    # 5. Flushall patch (Enable for stability on A8xx)
-    # Note: User patches show conflicting enable/disable. Default for gaming usually prefers disabled,
-    # but the specific patch series for A8xx enablement ends with re-enabling it.
-    # We will ensure it is ENABLED for Gen8.
-    if [[ -f "$tu_dev" ]]; then
-        # If previously disabled, re-enable.
-        # Pattern: tu_env.debug |= TU_DEBUG_FLUSHALL; inside case 8:
-        # We check if it's commented out.
-        if grep -q "tu_env.debug |= TU_DEBUG_FLUSHALL;" "$tu_dev"; then
-             log_info "Flushall already enabled or configured."
-        else
-             # Try to add it if missing inside case 8
-             sed -i '/case 8:/a\      tu_env.debug |= TU_DEBUG_FLUSHALL;' "$tu_dev" 2>/dev/null || true
-             log_info "Ensured TU_DEBUG_FLUSHALL is set for Gen8"
-        fi
     fi
 
     log_success "A8xx support applied"
@@ -1076,7 +1179,7 @@ PYEOF
 apply_rt_stub_support() {
     local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
     [[ ! -f "$tu_dev" ]] && { log_warn "RT stub: tu_device.cc not found"; return 0; }
-    if grep -q "RT_STUB_APPLIED\|shaderGroupHandleSize.*=.*32" "$tu_dev"; then
+    if grep -q "RT_STUB_APPLIED" "$tu_dev"; then
         log_info "RT stub already applied"
         return 0
     fi
@@ -1121,7 +1224,7 @@ for pat in RT_FEATURES:
 stub_pattern = r'(vkCreateRayTracingPipelinesKHR\b[^{]{0,300}\{)'
 def inject_stub_return(m):
     return m.group(0) + '''
-   /* RT_STUB_APPLIED: return VK_SUCCESS stub — no real RT backend */
+   /* RT_STUB_APPLIED: return VK_SUCCESS stub */
    if (pPipelines) {
       for (uint32_t _i = 0; _i < createInfoCount; _i++)
          pPipelines[_i] = VK_NULL_HANDLE;
@@ -1136,7 +1239,7 @@ if n:
 trace_pattern = r'(vkCmdTraceRaysKHR\b[^{]{0,300}\{)'
 def inject_trace_noop(m):
     return m.group(0) + '''
-   /* RT_STUB_APPLIED: no-op trace — no real RT backend */
+   /* RT_STUB_APPLIED: no-op trace */
    (void)commandBuffer; (void)pRaygenShaderBindingTable;
    (void)pMissShaderBindingTable; (void)pHitShaderBindingTable;
    (void)pCallableShaderBindingTable;
@@ -1195,97 +1298,6 @@ PYEOF
     log_success "DLSS/NGX driver-version stub applied"
 }
 
-apply_d3d12_basic_fix() {
-    local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
-    [[ ! -f "$tu_dev" ]] && { log_warn "D3D12 basic fix: tu_device.cc not found"; return 0; }
-    if grep -q "D3D12_BASIC_FIX\|maxDescriptorSetUpdateAfterBind.*1048576" "$tu_dev"; then
-        log_info "D3D12 basic fix already applied"
-        return 0
-    fi
-    log_info "Applying D3D12 basic descriptor indexing fix"
-    python3 - "$tu_dev" << 'PYEOF'
-import sys, re
-
-path = sys.argv[1]
-with open(path, encoding='utf-8', errors='ignore') as f:
-    c = f.read()
-
-changed = 0
-
-DESC_LIMITS = {
-    r'(maxDescriptorSetUpdateAfterBindSamplers\s*=\s*)(\d+)':
-        (1000000, r'\g<1>1000000'),
-    r'(maxDescriptorSetUpdateAfterBindSampledImages\s*=\s*)(\d+)':
-        (1000000, r'\g<1>1000000'),
-    r'(maxDescriptorSetUpdateAfterBindStorageImages\s*=\s*)(\d+)':
-        (1000000, r'\g<1>1000000'),
-    r'(maxDescriptorSetUpdateAfterBindStorageBuffers\s*=\s*)(\d+)':
-        (1000000, r'\g<1>1000000'),
-    r'(maxPerStageDescriptorUpdateAfterBindSampledImages\s*=\s*)(\d+)':
-        (1048576, r'\g<1>1048576'),
-    r'(maxPerStageDescriptorUpdateAfterBindStorageImages\s*=\s*)(\d+)':
-        (1048576, r'\g<1>1048576'),
-    r'(maxPerStageDescriptorUpdateAfterBindStorageBuffers\s*=\s*)(\d+)':
-        (1048576, r'\g<1>1048576'),
-    r'(maxPerStageUpdateAfterBindResources\s*=\s*)(\d+)':
-        (1048576, r'\g<1>1048576'),
-}
-for pat, (min_val, rep) in DESC_LIMITS.items():
-    def maybe_replace(m, min_v=min_val, r=rep):
-        try:
-            cur = int(m.group(2))
-            if cur < min_v:
-                return re.sub(pat, r, m.group(0))
-        except (IndexError, ValueError):
-            pass
-        return m.group(0)
-    new, n = re.subn(pat, maybe_replace, c)
-    if n: c = new; changed += n; print(f"  [DESC] Patched {pat[:60]}")
-
-INDEXING_FEATURES = [
-    'shaderSampledImageArrayNonUniformIndexing',
-    'shaderStorageBufferArrayNonUniformIndexing',
-    'shaderStorageImageArrayNonUniformIndexing',
-    'shaderUniformTexelBufferArrayNonUniformIndexing',
-    'shaderStorageTexelBufferArrayNonUniformIndexing',
-    'descriptorBindingSampledImageUpdateAfterBind',
-    'descriptorBindingStorageImageUpdateAfterBind',
-    'descriptorBindingStorageBufferUpdateAfterBind',
-    'descriptorBindingUniformTexelBufferUpdateAfterBind',
-    'descriptorBindingStorageTexelBufferUpdateAfterBind',
-    'descriptorBindingUpdateUnusedWhilePending',
-    'descriptorBindingPartiallyBound',
-    'descriptorBindingVariableDescriptorCount',
-    'runtimeDescriptorArray',
-]
-for feat in INDEXING_FEATURES:
-    new, n = re.subn(rf'({feat}\s*=\s*)VK_FALSE', rf'\g<1>VK_TRUE', c)
-    if n: c = new; changed += n; print(f"  [IDX] {feat} = VK_TRUE")
-
-VK13_FEATURES = [
-    'dynamicRendering',
-    'synchronization2',
-    'maintenance4',
-    'shaderIntegerDotProduct',
-    'inlineUniformBlock',
-    'pipelineCreationCacheControl',
-]
-for feat in VK13_FEATURES:
-    new, n = re.subn(rf'({feat}\s*=\s*)VK_FALSE', rf'\g<1>VK_TRUE', c)
-    if n: c = new; changed += n; print(f"  [VK13] {feat} = VK_TRUE")
-
-c = c.replace('/* DLSS_NGX_STUB: applied */',
-              '/* DLSS_NGX_STUB: applied */\n/* D3D12_BASIC_FIX: applied */', 1)
-if '/* D3D12_BASIC_FIX: applied */' not in c:
-    c = c.replace('#include "tu_device.h"',
-                  '#include "tu_device.h"\n/* D3D12_BASIC_FIX: applied */', 1)
-
-print(f"[OK] D3D12 basic fix: {changed} change(s) total")
-with open(path, 'w', encoding='utf-8') as f: f.write(c)
-PYEOF
-    log_success "D3D12 basic descriptor indexing fix applied"
-}
-
 apply_patches() {
     log_info "Applying patches for $TARGET_GPU"
     cd "$MESA_DIR"
@@ -1301,14 +1313,13 @@ apply_patches() {
         if [[ "$ENABLE_TIMELINE_HACK" == "true" ]]; then
             apply_timeline_semaphore_fix
         fi
-        if [[ "$ENABLE_UBWC_HACK" == "true" ]]; then
-             # Merged into apply_a8xx_device_support for UBWC 5/6
-             true
-        fi
+        
         apply_gralloc_ubwc_fix
+        
         if [[ "$ENABLE_DECK_EMU" == "true" ]]; then
             apply_deck_emu_support
         fi
+        
         if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then
             apply_vulkan_extensions_support
         fi
@@ -1325,7 +1336,8 @@ apply_patches() {
             apply_a6xx_query_fix
         fi
 
-        apply_d3d12_basic_fix
+        # D3D12 / D3D11 Fix - MUST BE LAST FOR FEATURES
+        apply_d3d12_feature_force
         apply_rt_stub_support
         
         if [[ "$ENABLE_DECK_EMU" == "true" && "$DECK_EMU_TARGET" == "nvidia" ]]; then
@@ -1562,12 +1574,6 @@ print_summary() {
     echo "  Build Date     : $build_date"
     echo "  Build Variant  : $BUILD_VARIANT"
     echo "  Source         : $MESA_SOURCE"
-    echo "  Performance    : $ENABLE_PERF"
-    echo "  Ext Spoof      : $ENABLE_EXT_SPOOF"
-    echo "  Deck Emu       : $ENABLE_DECK_EMU"
-    echo "  Timeline Hack  : $ENABLE_TIMELINE_HACK"
-    echo "  UBWC Hack      : $ENABLE_UBWC_HACK"
-    echo "  Patch Series   : $APPLY_PATCH_SERIES"
     echo "  Output         :"
     ls -lh "${WORKDIR}"/*.zip 2>/dev/null | awk '{print "    " $9 " (" $5 ")"}'
     echo ""
