@@ -48,6 +48,11 @@ check_deps() {
             exit 1
         fi
     done
+    # Verify NDK early
+    if [[ ! -d "${NDK_PATH}" ]]; then
+        log_error "NDK not found at ${NDK_PATH}. Please set NDK_PATH correctly."
+        exit 1
+    fi
     log_success "Dependencies check passed"
 }
 
@@ -288,8 +293,6 @@ import sys, re
 fp = sys.argv[1]
 with open(fp) as f: content = f.read()
 
-# Find the specific block and replace it
-# Target: #ifdef HAS_FREEDRENO ... #endif block inside fallback_gralloc_get_buffer_info
 old_block = r'(#ifdef HAS_FREEDRENO\s*uint32_t gmsm.*?out->modifier = ubwc \? DRM_FORMAT_MOD_QCOM_COMPRESSED : DRM_FORMAT_MOD_LINEAR;\s*}\s*#endif)'
 new_block = '''#ifdef HAS_FREEDRENO
    if (hnd->handle->numInts >= 2) {
@@ -302,7 +305,6 @@ if re.search(old_block, content, re.DOTALL):
     content = re.sub(old_block, new_block, content, flags=re.DOTALL)
     print("[OK] Gralloc UBWC block replaced")
 else:
-    # Fallback if already patched or structure changed
     if "bool ubwc = hnd->handle->data" in content:
         print("[INFO] Gralloc seems already patched")
     else:
@@ -378,14 +380,11 @@ apply_a6xx_query_fix() {
     find "${MESA_DIR}/src/freedreno/vulkan" -name "tu_query*.cc" -exec sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' {} \; 2>/dev/null || true
 }
 
-# Consolidated A8xx Support
 apply_a8xx_device_support() {
     log_info "Applying A8xx device support (FD810/825/829/830)"
-    # This function is crucial for Adreno 8xx hangs
     local devfile="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
     local knl_kgsl="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
     
-    # 1. UBWC 5/6
     if [[ -f "$knl_kgsl" ]]; then
         if ! grep -q "case 5:" "$knl_kgsl"; then
              sed -i '/case KGSL_UBWC_4_0:/a\   case 5:\n   case 6:' "$knl_kgsl" 2>/dev/null || true
@@ -393,39 +392,23 @@ apply_a8xx_device_support() {
         fi
     fi
     
-    # 2. Add Device IDs using Python
     if [[ -f "$devfile" ]]; then
         python3 - "$devfile" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: content = f.read()
 
-# We will inject the GPUProps and add_gpus calls if FD830 isn't properly defined
 if "add_gpus([\\n        GPUId(chip_id=0x44050000" not in content and "FD830" not in content:
-    # Inject new GPU definitions
     props_code = """
 a8xx_gen1 = GPUProps(reg_size_vec4 = 96, disable_gmem = True)
 a8xx_gen2 = GPUProps(reg_size_vec4 = 128, has_salu_int_narrowing_quirk = True)
-
-a8xx_830 = GPUProps(
-    sysmem_vpc_attr_buf_size = 131072, sysmem_vpc_pos_buf_size = 65536, sysmem_vpc_bv_pos_buf_size = 32768,
-    disable_gmem = True, has_fs_tex_prefetch = False,
-)
-a8xx_825 = GPUProps(
-    sysmem_vpc_attr_buf_size = 131072, sysmem_vpc_pos_buf_size = 65536, sysmem_vpc_bv_pos_buf_size = 32768,
-)
-a8xx_810 = GPUProps(
-    sysmem_vpc_attr_buf_size = 131072, sysmem_vpc_pos_buf_size = 65536, sysmem_vpc_bv_pos_buf_size = 32768,
-    disable_gmem = True, has_ray_intersection = False, has_sw_fuse = False,
-)
-a8xx_829 = GPUProps(
-    sysmem_vpc_attr_buf_size = 131072, sysmem_vpc_pos_buf_size = 65536, sysmem_vpc_bv_pos_buf_size = 32768,
-    disable_gmem = True,
-)
+a8xx_830 = GPUProps(disable_gmem = True, has_fs_tex_prefetch = False)
+a8xx_825 = GPUProps()
+a8xx_810 = GPUProps(disable_gmem = True, has_ray_intersection = False, has_sw_fuse = False)
+a8xx_829 = GPUProps(disable_gmem = True)
 """
     content += "\n" + props_code
     
-    # Inject add_gpus
     add_gpus_code = """
 add_gpus([GPUId(chip_id=0x44050000, name="FD830"), GPUId(chip_id=0x44050001, name="FD830v2")], 
     A6xxGPUInfo(CHIP.A8XX, [a7xx_base, a7xx_gen3, a8xx_base, a8xx_830], num_ccu=6, num_slices=3, tile_align_w=64, tile_align_h=32, tile_max_w=16384, tile_max_h=16384, num_vsc_pipes=32, cs_shared_mem_size=32*1024, wave_granularity=2, fibers_per_sp=128*2*16, raw_magic_regs=a8xx_gen2_raw_magic_regs))
@@ -453,35 +436,45 @@ apply_vulkan_extensions_support() {
     local vk_exts_py="${MESA_DIR}/src/vulkan/util/vk_extensions.py"
     [[ ! -f "$tu_device" ]] && return 0
 
-    # 1. Patch vk_extensions.py to allow all extensions (Best effort)
+    # 1. Patch vk_extensions.py safely
     if [[ -f "$vk_exts_py" ]]; then
         python3 - "$vk_exts_py" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
+
 # Lower API levels
 c = re.sub(r'("VK_\w+"\s*:\s*)(\d+)(,)', lambda m: m.group(1)+'1'+m.group(3), c)
-# Append missing high-value extensions
-missing = ["VK_KHR_maintenance7","VK_KHR_maintenance8","VK_KHR_maintenance9","VK_KHR_maintenance10",
-"VK_KHR_performance_query","VK_KHR_pipeline_binary","VK_KHR_pipeline_executable_properties",
-"VK_KHR_pipeline_library","VK_KHR_present_mode_fifo_latest_ready","VK_KHR_present_wait2",
-"VK_EXT_descriptor_buffer","VK_EXT_mesh_shader","VK_EXT_opacity_micromap","VK_EXT_shader_object"]
-for ext in missing:
-    if f'"{ext}"' not in c:
-        c = c.rstrip() + f'\n    "{ext}": 1,\n'
+
+# Inject extensions SAFELY into the dictionary
+# Find vk_api_extensions = { ... }
+m = re.search(r'(vk_api_extensions\s*=\s*\{)', c)
+if m:
+    insert_txt = '\n        # === FORCED EXTENSIONS ==='
+    missing = ["VK_KHR_maintenance7","VK_KHR_maintenance8","VK_KHR_maintenance9","VK_KHR_maintenance10",
+    "VK_KHR_performance_query","VK_KHR_pipeline_binary","VK_EXT_shader_object","VK_EXT_mesh_shader"]
+    for ext in missing:
+        if f'"{ext}"' not in c:
+            insert_txt += f'\n        "{ext}": 1,'
+    insert_txt += '\n        # === END ==='
+    
+    # Insert right after the opening brace
+    c = c[:m.end()] + insert_txt + c[m.end():]
+    print(f"[OK] Injected extensions into vk_api_extensions dict")
+else:
+    print("[WARN] Could not find vk_api_extensions dict. Skipping vk_extensions.py patch.")
+
 with open(fp,'w') as f: f.write(c)
-print(f"[OK] vk_extensions.py updated")
 PYEOF
     fi
 
-    # 2. Patch tu_device.cc: Force Features + Inject Extensions (HARDCODED LIST)
-    # We use a hardcoded list to ensure we inject 320+ extensions regardless of vk_extensions.py structure
+    # 2. Patch tu_device.cc (Hardcoded List - The important part)
     python3 - "$tu_device" << 'PYEOF'
 import sys, re
 tu_path = sys.argv[1]
 with open(tu_path) as f: content = f.read()
 
-# --- PASS 1: Force Feature Flags (Critical for D3D12) ---
+# --- PASS 1: Force Feature Flags ---
 feats=[
     "shaderFloat64","shaderStorageImageMultisample","uniformAndStorageBuffer16BitAccess",
     "storagePushConstant16","uniformAndStorageBuffer8BitAccess","storagePushConstant8",
@@ -514,7 +507,6 @@ feats=[
 ]
 nf=0
 for p in feats:
-    # Match p->feature = ... or .feature = ...
     new,n=re.subn(rf'((?:p|features|props|pdevice|pdev)->{re.escape(p)}\s*=\s*)([^;,\n]+)([;,\n])',r'\1true\3',content)
     if n: content=new; nf+=n
     new,n=re.subn(rf'(\.{re.escape(p)}\s*=\s*)([^;,\n]+)([;,\n])',r'\1true\3',content)
@@ -522,7 +514,6 @@ for p in feats:
 print(f"[OK] Forced {nf} feature flags to true")
 
 # --- PASS 2: Inject Extension Strings (Hardcoded List) ---
-# We define the full list here to ensure 320+ extensions are injected
 ALL_EXTS = [
 "VK_KHR_16bit_storage","VK_KHR_8bit_storage","VK_KHR_acceleration_structure",
 "VK_KHR_bind_memory2","VK_KHR_buffer_device_address","VK_KHR_calibrated_timestamps",
@@ -647,7 +638,6 @@ ALL_EXTS = [
 "VK_VALVE_mutable_descriptor_type","VK_VALVE_shader_mixed_float_dot_product",
 ]
 
-# Filter out instance-only extensions (we only want device extensions)
 INST_ONLY={
 "VK_KHR_surface","VK_KHR_wayland_surface","VK_KHR_win32_surface","VK_KHR_xcb_surface",
 "VK_KHR_xlib_surface","VK_EXT_debug_report","VK_EXT_debug_utils","VK_EXT_headless_surface",
@@ -656,7 +646,6 @@ INST_ONLY={
 dev_exts=[e for e in ALL_EXTS if e not in INST_ONLY]
 print(f"[INFO] Injecting {len(dev_exts)} device extensions")
 
-# Find injection point
 def find_point(text):
     for pat in [
         r'tu_get_device_extensions\s*\([^{]*?struct\s+vk_device_extension_table\s*\*\s*(\w+)',
@@ -710,10 +699,7 @@ apply_patches() {
         apply_gralloc_ubwc_fix
         if [[ "$ENABLE_DECK_EMU" == "true" ]]; then apply_deck_emu_support; fi
         if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then apply_vulkan_extensions_support; fi
-        
-        # Apply A8xx support unconditionally for newer drivers to prevent hangs
         apply_a8xx_device_support
-        
         if [[ "$BUILD_VARIANT" == "autotuner" ]]; then apply_a6xx_query_fix; fi
     fi
 
@@ -849,7 +835,6 @@ package_driver() {
     local driver_src="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
     local pkg_dir="${WORKDIR}/package"
     
-    # Naming Logic: ad07xx, ad08xx
     local name_suffix="${TARGET_GPU:1}"
     local driver_name="vulkan.ad0${name_suffix}.so"
 
