@@ -1,4 +1,4 @@
-name: Build Turnip Driver 
+name: Build_T-D
 
 on:
   workflow_dispatch:
@@ -119,10 +119,10 @@ jobs:
           unzip -q ndk.zip
           mv ${{ env.NDK_VERSION }} android-ndk
 
-      - name: Build turnip_driver
+      - name: Build
         id: build
         run: |
-          chmod +x turnip_driver.sh
+          chmod +x build.sh
           export MESA_SOURCE="${{ inputs.mesa_source || 'main_branch' }}"
           export STAGING_BRANCH="${{ inputs.staging_branch || 'staging/26.0' }}"
           export CUSTOM_TAG="${{ inputs.custom_tag || '' }}"
@@ -136,7 +136,7 @@ jobs:
           export DECK_EMU_TARGET="${{ inputs.deck_emu_target || 'nvidia' }}"
           export ENABLE_TIMELINE_HACK="${{ inputs.enable_timeline_hack || 'true' }}"
 
-          bash turnip_driver.sh
+          bash build.sh
 
           echo "version=$(cat build/version.txt)"             >> $GITHUB_OUTPUT
           echo "filename=$(cat build/filename.txt)"           >> $GITHUB_OUTPUT
