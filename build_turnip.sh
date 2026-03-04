@@ -349,7 +349,7 @@ inj = (
 done = False
 m = re.search(r'(\n[ \t]*p->denormBehaviorIndependence\s*=)', c)
 if m:
-    c = c[:m.start()] + '\n' + inj + c[m.start()]
+    c = c[:m.start()] + '\n' + inj + c[m.start():]
     done = True
 if not done:
     fm = re.search(r'tu_get_physical_device_properties_1_2\s*\([^)]*\)\s*\{', c)
