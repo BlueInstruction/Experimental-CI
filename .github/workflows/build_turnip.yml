@@ -220,7 +220,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/mesa-cache
-          key: mesa-${{ needs.pre-check.outputs.mesa_ref }}-${{ hashFiles('build_turnip_aaa.sh') }}
+          key: mesa-${{ needs.pre-check.outputs.mesa_ref }}-${{ hashFiles('build_turnip.sh') }}
           restore-keys: |
             mesa-${{ needs.pre-check.outputs.mesa_ref }}-
 
