@@ -315,23 +315,13 @@ dv  = sys.argv[4]
 vid = int(sys.argv[5], 16)
 devid = int(sys.argv[6], 16)
 with open(fp) as f: c = f.read()
-inj = (
-'
-if (TU_DEBUG(DECK_EMU)) {
-'
-'   p->driverID = ' + did + ';
-'
-'   memset(p->driverName, 0, sizeof(p->driverName));
-'
-'   snprintf(p->driverName, VK_MAX_DRIVER_NAME_SIZE, "' + dn + '");
-'
-'   memset(p->driverInfo, 0, sizeof(p->driverInfo));
-'
-'   snprintf(p->driverInfo, VK_MAX_DRIVER_INFO_SIZE, "Mesa (spoofed)");
-'
-'}
-'
-)
+inj = '\nif (TU_DEBUG(DECK_EMU)) {\n'
+inj += '   p->driverID = ' + did + ';\n'
+inj += '   memset(p->driverName, 0, sizeof(p->driverName));\n'
+inj += '   snprintf(p->driverName, VK_MAX_DRIVER_NAME_SIZE, "' + dn + '");\n'
+inj += '   memset(p->driverInfo, 0, sizeof(p->driverInfo));\n'
+inj += '   snprintf(p->driverInfo, VK_MAX_DRIVER_INFO_SIZE, "Mesa (spoofed)");\n'
+inj += '}\n'
 done = False
 patterns = [
 r'(p->denormBehaviorIndependence\s*=\s*[^;]+;)',
