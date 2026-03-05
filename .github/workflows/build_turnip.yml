@@ -52,7 +52,6 @@ on:
         description: "Target GPU generation"
         default: "a7xx"
         options:
-          - a6xx
           - a7xx
           - a8xx
 
@@ -169,8 +168,8 @@ jobs:
       ENABLE_UBWC_HACK: ${{ inputs.enable_ubwc_hack }}
       APPLY_PATCH_SERIES: ${{ inputs.apply_patch_series }}
       ENABLE_PERF: ${{ inputs.enable_perf }}
-      CFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math' || '-O2' }}
-      CXXFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-exceptions' || '-O2' }}
+      CFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only' || '-O2' }}
+      CXXFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-exceptions' || '-O2' }}
       LDFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-Wl,--gc-sections -Wl,--icf=safe' || '' }}
       NDK_PATH: ${{ github.workspace }}/android-ndk
       API_LEVEL: ${{ inputs.api_level || '35' }}
@@ -223,6 +222,15 @@ jobs:
           key: mesa-${{ needs.pre-check.outputs.mesa_ref }}-${{ hashFiles('build_turnip.sh') }}
           restore-keys: |
             mesa-${{ needs.pre-check.outputs.mesa_ref }}-
+
+      - name: Cache Meson subproject downloads
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/build/mesa/subprojects/packagecache
+          key: meson-wraps-${{ needs.pre-check.outputs.mesa_ref }}-v1
+          restore-keys: |
+            meson-wraps-${{ needs.pre-check.outputs.mesa_ref }}-
+            meson-wraps-
 
       - name: Prepare build script
         run: |
@@ -280,19 +288,6 @@ jobs:
             | GPU Target | `${{ inputs.target_gpu }}` |
             | Build Type | `${{ inputs.build_type }}` |
             | Variant | `${{ inputs.build_variant }}` |
-
-            ### Enabled Features:
-            ${{ inputs.enable_ext_spoof == true && '- Vulkan Extensions Spoofing' || '' }}
-            ${{ inputs.enable_deck_emu == true && format('- Deck Emulation (spoof as {0})', inputs.deck_emu_target) || '' }}
-            ${{ inputs.enable_timeline_hack == true && '- Timeline Semaphore Optimization' || '' }}
-            ${{ inputs.enable_ubwc_hack == true && '- UBWC 5/6 Support (A8xx)' || '' }}
-            ${{ inputs.enable_perf == true && '- Performance Flags (-O3 + LTO + ARMv8.2-A)' || '' }}
-
-            ### Installation (Winlator):
-            1. Copy the .zip file to /sdcard/Android/data/com.winlator/files/drivers/
-            2. Open Winlator -> Settings -> Graphics Driver
-            3. Select the new driver from the list
-            4. Enjoy
 
             ---
             Compiled from Mesa freedreno
