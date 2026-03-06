@@ -77,16 +77,25 @@ on:
         description: "Enable timeline semaphore optimization"
         default: true
 
-      enable_custom_flags:
+      enable_ubwc_hack:
         type: boolean
-        description: "Enable custom TU_DEBUG flags"
+        description: "Enable UBWC 5/6 support"
+        default: true
+
+      apply_patch_series:
+        type: boolean
+        description: "Apply patch series if present"
         default: true
 
       enable_perf:
         type: boolean
-        description: "Enable performance optimizations"
+        description: "Enable performance options"
         default: false
 
+      enable_custom_flags:
+        type: boolean
+        description: "Enable custom TU_DEBUG flags"
+        default: true
       apply_graphics_patches:
         type: boolean
         description: "Apply graphics fix patches for AAA games"
@@ -96,6 +105,7 @@ on:
         description: "Custom TU_DEBUG flags (comma-separated)"
         required: false
         default: "push_regs,ubwc_all,defrag,unroll,turbo"
+
       create_release:
         type: boolean
         description: "Create GitHub Release"
@@ -135,8 +145,7 @@ jobs:
         id: resolve
         run: |
           case "${{ inputs.mesa_source }}" in
-            latest_release)
-              ref=$(git ls-remote --tags https://gitlab.freedesktop.org/mesa/mesa.git | \
+            latest_release)              ref=$(git ls-remote --tags https://gitlab.freedesktop.org/mesa/mesa.git | \
                     grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
               ;;
             staging_branch) ref="${{ inputs.staging_branch }}" ;;
@@ -145,26 +154,35 @@ jobs:
             *) ref="main" ;;
           esac
           echo "ref=$ref" >> $GITHUB_OUTPUT
+
   build-turnip:
     needs: pre-check
     if: needs.pre-check.outputs.validated == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: "${{ inputs.target_gpu }}"
+            variant: "${{ inputs.build_variant }}"
     env:
       MESA_SOURCE: ${{ inputs.mesa_source }}
       STAGING_BRANCH: ${{ inputs.staging_branch }}
       CUSTOM_TAG: ${{ inputs.custom_tag }}
       BUILD_TYPE: ${{ inputs.build_type }}
-      BUILD_VARIANT: ${{ inputs.build_variant }}
-      TARGET_GPU: ${{ inputs.target_gpu }}
+      BUILD_VARIANT: ${{ matrix.variant }}
+      TARGET_GPU: ${{ matrix.target }}
       ENABLE_EXT_SPOOF: ${{ inputs.enable_ext_spoof }}
       ENABLE_DECK_EMU: ${{ inputs.enable_deck_emu }}
       DECK_EMU_TARGET: ${{ inputs.deck_emu_target }}
       ENABLE_TIMELINE_HACK: ${{ inputs.enable_timeline_hack }}
+      ENABLE_UBWC_HACK: ${{ inputs.enable_ubwc_hack }}
+      APPLY_PATCH_SERIES: ${{ inputs.apply_patch_series }}
+      ENABLE_PERF: ${{ inputs.enable_perf }}
       ENABLE_CUSTOM_FLAGS: ${{ inputs.enable_custom_flags }}
       APPLY_GRAPHICS_PATCHES: ${{ inputs.apply_graphics_patches }}
       CUSTOM_TU_DEBUG: ${{ inputs.custom_tu_debug }}
-      ENABLE_PERF: ${{ inputs.enable_perf }}
       CFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only' || '-O2' }}
       CXXFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-exceptions' || '-O2' }}
       LDFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-Wl,--gc-sections -Wl,--icf=safe' || '' }}
@@ -176,8 +194,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
+        with:          fetch-depth: 1
 
       - name: Install build dependencies
         run: |
@@ -194,7 +211,8 @@ jobs:
           fi
           pip3 install --break-system-packages mako pyyaml
 
-      - name: Cache Android NDK        id: cache-ndk
+      - name: Cache Android NDK
+        id: cache-ndk
         uses: actions/cache@v4
         with:
           path: ${{ env.NDK_PATH }}
@@ -225,8 +243,7 @@ jobs:
           path: ${{ github.workspace }}/build/mesa/subprojects/packagecache
           key: meson-wraps-${{ needs.pre-check.outputs.mesa_ref }}-v1
           restore-keys: |
-            meson-wraps-${{ needs.pre-check.outputs.mesa_ref }}-
-            meson-wraps-
+            meson-wraps-${{ needs.pre-check.outputs.mesa_ref }}-            meson-wraps-
 
       - name: Prepare build script
         run: |
@@ -243,7 +260,8 @@ jobs:
           end_time=$(date +%s)
           duration=$((end_time - start_time))
           echo "Build completed in $((duration/60))m $((duration%60))s"
-          if [[ -d "build" ]]; then            echo "filename=$(ls build/turnip_*.zip 2>/dev/null | head -1 | xargs basename)" >> $GITHUB_OUTPUT
+          if [[ -d "build" ]]; then
+            echo "filename=$(ls build/turnip_*.zip 2>/dev/null | head -1 | xargs basename)" >> $GITHUB_OUTPUT
             echo "version=$(cat build/version.txt 2>/dev/null || echo 'unknown')" >> $GITHUB_OUTPUT
             echo "commit=$(cat build/commit.txt 2>/dev/null | head -c 8)" >> $GITHUB_OUTPUT
             echo "vulkan=$(cat build/vulkan_version.txt 2>/dev/null || echo '1.4.0')" >> $GITHUB_OUTPUT
@@ -274,7 +292,6 @@ jobs:
           name: "Turnip ${{ steps.build.outputs.version }} (${{ inputs.target_gpu }})"
           body: |
             ## Turnip Vulkan Driver Build
-
             | Property | Value |
             |----------|-------|
             | Version | `${{ steps.build.outputs.version }}` |
@@ -288,11 +305,14 @@ jobs:
             ${{ inputs.enable_ext_spoof == true && '- Vulkan Extensions Spoofing' || '' }}
             ${{ inputs.enable_deck_emu == true && format('- Deck Emulation (spoof as {0})', inputs.deck_emu_target) || '' }}
             ${{ inputs.enable_timeline_hack == true && '- Timeline Semaphore Optimization' || '' }}
+            ${{ inputs.enable_ubwc_hack == true && '- UBWC 5/6 Support (A8xx)' || '' }}
             ${{ inputs.apply_graphics_patches == true && '- Graphics Fix Patches for AAA Games' || '' }}
+            ${{ inputs.enable_perf == true && '- Performance Flags (-O3 + LTO + ARMv8.2-A)' || '' }}
             ${{ inputs.enable_custom_flags == true && format('- Custom TU_DEBUG Flags: {0}', inputs.custom_tu_debug) || '' }}
 
             ---
-            Compiled from Mesa freedreno          files: |
+            Compiled from Mesa freedreno
+          files: |
             build/*.zip
           draft: ${{ inputs.release_as_draft }}
           prerelease: ${{ inputs.build_variant == 'debug' || inputs.build_variant == 'profile' }}
@@ -321,8 +341,7 @@ jobs:
           echo ""
 
   notify-on-failure:
-    needs: build-turnip
-    if: failure()
+    needs: build-turnip    if: failure()
     runs-on: ubuntu-latest
     steps:
       - name: Notify build failure
