@@ -93,6 +93,16 @@ on:
         description: "Enable performance options"
         default: false
 
+      enable_custom_flags:
+        type: boolean
+        description: "Enable custom TU_DEBUG flags (push_regs, ubwc_all, defrag, unroll, turbo)"
+        default: false
+
+      custom_tu_debug:
+        description: "Custom TU_DEBUG flags (comma-separated, e.g. push_regs,ubwc_all,defrag)"
+        required: false
+        default: "push_regs,ubwc_all,defrag,unroll"
+
       create_release:
         type: boolean
         description: "Create GitHub Release"
@@ -168,6 +178,12 @@ jobs:
       ENABLE_UBWC_HACK: ${{ inputs.enable_ubwc_hack }}
       APPLY_PATCH_SERIES: ${{ inputs.apply_patch_series }}
       ENABLE_PERF: ${{ inputs.enable_perf }}
+      ENABLE_CUSTOM_FLAGS: ${{ inputs.enable_custom_flags }}
+      CUSTOM_TU_DEBUG: ${{ inputs.custom_tu_debug }}
+      # FIX: Added -fno-finite-math-only after -ffast-math to prevent
+      # "-Wnan-infinity-disabled" warnings from NaN usage in Mesa NIR code.
+      # -ffast-math implies -ffinite-math-only which makes isnan() undefined;
+      # -fno-finite-math-only restores safe NaN/Inf semantics selectively.
       CFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only' || '-O2' }}
       CXXFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-exceptions' || '-O2' }}
       LDFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-Wl,--gc-sections -Wl,--icf=safe' || '' }}
@@ -223,6 +239,10 @@ jobs:
           restore-keys: |
             mesa-${{ needs.pre-check.outputs.mesa_ref }}-
 
+      # FIX: Cache Meson wrap downloads so spirv-tools/spirv-headers tarballs
+      # are not re-downloaded on every run. Meson resolves these via .wrap files
+      # at configure time (the old manual KhronosGroup clone was broken because
+      # those repos use CMake and have no meson.build).
       - name: Cache Meson subproject downloads
         uses: actions/cache@v4
         with:
@@ -289,6 +309,14 @@ jobs:
             | Build Type | `${{ inputs.build_type }}` |
             | Variant | `${{ inputs.build_variant }}` |
 
+            ### Enabled Features:
+            ${{ inputs.enable_ext_spoof == true && '- Vulkan Extensions Spoofing' || '' }}
+            ${{ inputs.enable_deck_emu == true && format('- Deck Emulation (spoof as {0})', inputs.deck_emu_target) || '' }}
+            ${{ inputs.enable_timeline_hack == true && '- Timeline Semaphore Optimization' || '' }}
+            ${{ inputs.enable_ubwc_hack == true && '- UBWC 5/6 Support (A8xx)' || '' }}
+            ${{ inputs.enable_perf == true && '- Performance Flags (-O3 + LTO + ARMv8.2-A)' || '' }}
+            ${{ inputs.enable_custom_flags == true && format('- Custom TU_DEBUG Flags: {0}', inputs.custom_tu_debug) || '' }}
+
             ---
             Compiled from Mesa freedreno
           files: |
@@ -313,6 +341,10 @@ jobs:
             echo "  Commit     : $(cat build/commit.txt)"
           fi
           echo "  Artifacts  : $(ls build/*.zip 2>/dev/null | wc -l) file(s)"
+          if [[ "${{ inputs.enable_custom_flags }}" == "true" ]]; then
+            echo "  TU_DEBUG   : ${{ inputs.custom_tu_debug }}"
+            echo "  Winlator   : TU_DEBUG=${{ inputs.custom_tu_debug }}"
+          fi
           echo ""
 
   notify-on-failure:
