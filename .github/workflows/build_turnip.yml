@@ -82,6 +82,11 @@ on:
         description: "Enable custom TU_DEBUG flags"
         default: true
 
+      enable_perf:
+        type: boolean
+        description: "Enable performance optimizations"
+        default: false
+
       apply_graphics_patches:
         type: boolean
         description: "Apply graphics fix patches for AAA games"
@@ -91,11 +96,11 @@ on:
         description: "Custom TU_DEBUG flags (comma-separated)"
         required: false
         default: "push_regs,ubwc_all,defrag,unroll,turbo"
-
       create_release:
         type: boolean
         description: "Create GitHub Release"
         default: true
+
       release_as_draft:
         type: boolean
         description: "Save release as draft"
@@ -140,24 +145,18 @@ jobs:
             *) ref="main" ;;
           esac
           echo "ref=$ref" >> $GITHUB_OUTPUT
-
   build-turnip:
     needs: pre-check
     if: needs.pre-check.outputs.validated == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 180    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: "${{ inputs.target_gpu }}"
-            variant: "${{ inputs.build_variant }}"
+    timeout-minutes: 180
     env:
       MESA_SOURCE: ${{ inputs.mesa_source }}
       STAGING_BRANCH: ${{ inputs.staging_branch }}
       CUSTOM_TAG: ${{ inputs.custom_tag }}
       BUILD_TYPE: ${{ inputs.build_type }}
-      BUILD_VARIANT: ${{ matrix.variant }}
-      TARGET_GPU: ${{ matrix.target }}
+      BUILD_VARIANT: ${{ inputs.build_variant }}
+      TARGET_GPU: ${{ inputs.target_gpu }}
       ENABLE_EXT_SPOOF: ${{ inputs.enable_ext_spoof }}
       ENABLE_DECK_EMU: ${{ inputs.enable_deck_emu }}
       DECK_EMU_TARGET: ${{ inputs.deck_emu_target }}
@@ -165,6 +164,7 @@ jobs:
       ENABLE_CUSTOM_FLAGS: ${{ inputs.enable_custom_flags }}
       APPLY_GRAPHICS_PATCHES: ${{ inputs.apply_graphics_patches }}
       CUSTOM_TU_DEBUG: ${{ inputs.custom_tu_debug }}
+      ENABLE_PERF: ${{ inputs.enable_perf }}
       CFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only' || '-O2' }}
       CXXFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-exceptions' || '-O2' }}
       LDFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-Wl,--gc-sections -Wl,--icf=safe' || '' }}
