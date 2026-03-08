@@ -13,6 +13,7 @@ on:
           - main_branch
           - custom_tag
           - latest_main
+          - autotuner
 
       staging_branch:
         type: choice
@@ -23,13 +24,13 @@ on:
           - staging/25.3
 
       custom_tag:
-        description: "Custom tag"
+        description: "Custom Mesa tag"
         required: false
         default: ""
 
       build_type:
         type: choice
-        description: "Build type"
+        description: "Meson build type"
         default: "release"
         options:
           - release
@@ -55,23 +56,23 @@ on:
           - a7xx
           - a8xx
 
-      enable_ext_spoof:
-        type: boolean
-        description: "Enable Vulkan extension spoofing"
-        default: true
-
-      enable_deck_emu:
-        type: boolean
-        description: "Enable deck_emu GPU identity spoof"
-        default: true
-
-      deck_emu_target:
+      ndk_version:
         type: choice
-        description: "GPU to spoof"
-        default: "nvidia"
+        description: "Android NDK version"
+        default: "android-ndk-r29"
         options:
-          - nvidia
-          - amd
+          - android-ndk-r29
+          - android-ndk-r28
+          - android-ndk-r27
+
+      api_level:
+        type: choice
+        description: "Android API level"
+        default: "35"
+        options:
+          - "35"
+          - "34"
+          - "33"
 
       enable_timeline_hack:
         type: boolean
@@ -88,18 +89,36 @@ on:
         description: "Apply patch series if present"
         default: true
 
+      enable_ext_spoof:
+        type: boolean
+        description: "Unlock all Turnip-implemented Vulkan extensions"
+        default: true
+
+      enable_deck_emu:
+        type: boolean
+        description: "Enable deck_emu GPU identity spoof"
+        default: true
+
+      deck_emu_target:
+        type: choice
+        description: "GPU vendor to spoof"
+        default: "nvidia"
+        options:
+          - nvidia
+          - amd
+
       enable_perf:
         type: boolean
-        description: "Enable performance options"
+        description: "Enable performance flags"
         default: false
 
       enable_custom_flags:
         type: boolean
-        description: "Enable custom TU_DEBUG flags (push_regs, ubwc_all, defrag, unroll, turbo)"
-        default: false
+        description: "Enable custom TU_DEBUG flags"
+        default: true
 
       custom_tu_debug:
-        description: "Custom TU_DEBUG flags (comma-separated, e.g. push_regs,ubwc_all,defrag)"
+        description: "Custom TU_DEBUG flags (comma-separated)"
         required: false
         default: "push_regs,ubwc_all,defrag,unroll"
 
@@ -118,22 +137,20 @@ permissions:
   actions: read
 
 env:
-  DEFAULT_NDK: "android-ndk-r29"
-  DEFAULT_API: "35"
-  CACHE_VERSION: "v2"
+  CACHE_VERSION: "v3"
 
 jobs:
   pre-check:
     runs-on: ubuntu-latest
     outputs:
       validated: ${{ steps.validate.outputs.ok }}
-      mesa_ref: ${{ steps.resolve.outputs.ref }}
+      mesa_ref:  ${{ steps.resolve.outputs.ref }}
     steps:
       - name: Validate inputs
         id: validate
         run: |
-          if [[ "${{ inputs.custom_tag }}" == "custom_tag" && -z "${{ inputs.custom_tag }}" ]]; then
-            echo "custom_tag required when selected"
+          if [[ "${{ inputs.mesa_source }}" == "custom_tag" && -z "${{ inputs.custom_tag }}" ]]; then
+            echo "custom_tag is required when mesa_source=custom_tag"
             exit 1
           fi
           echo "ok=true" >> $GITHUB_OUTPUT
@@ -143,13 +160,15 @@ jobs:
         run: |
           case "${{ inputs.mesa_source }}" in
             latest_release)
-              ref=$(git ls-remote --tags https://gitlab.freedesktop.org/mesa/mesa.git | \
-                    grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+              ref=$(git ls-remote --tags https://gitlab.freedesktop.org/mesa/mesa.git \
+                    2>/dev/null | grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+              [[ -z "$ref" ]] && ref="main"
               ;;
             staging_branch) ref="${{ inputs.staging_branch }}" ;;
             main_branch|latest_main) ref="main" ;;
-            custom_tag) ref="${{ inputs.custom_tag }}" ;;
-            *) ref="main" ;;
+            custom_tag)  ref="${{ inputs.custom_tag }}" ;;
+            autotuner)   ref="autotuner" ;;
+            *)           ref="main" ;;
           esac
           echo "ref=$ref" >> $GITHUB_OUTPUT
 
@@ -162,30 +181,41 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: "${{ inputs.target_gpu }}"
+          - target:  "${{ inputs.target_gpu }}"
             variant: "${{ inputs.build_variant }}"
+
     env:
-      MESA_SOURCE: ${{ inputs.mesa_source }}
-      STAGING_BRANCH: ${{ inputs.staging_branch }}
-      CUSTOM_TAG: ${{ inputs.custom_tag }}
-      BUILD_TYPE: ${{ inputs.build_type }}
-      BUILD_VARIANT: ${{ matrix.variant }}
-      TARGET_GPU: ${{ matrix.target }}
-      ENABLE_EXT_SPOOF: ${{ inputs.enable_ext_spoof }}
-      ENABLE_DECK_EMU: ${{ inputs.enable_deck_emu }}
-      DECK_EMU_TARGET: ${{ inputs.deck_emu_target }}
+      MESA_SOURCE:          ${{ inputs.mesa_source }}
+      STAGING_BRANCH:       ${{ inputs.staging_branch }}
+      CUSTOM_TAG:           ${{ inputs.custom_tag }}
+      MESA_LOCAL_PATH:      ""
+      BUILD_TYPE:           ${{ inputs.build_type }}
+      BUILD_VARIANT:        ${{ matrix.variant }}
+      TARGET_GPU:           ${{ matrix.target }}
+      NDK_PATH:             ${{ github.workspace }}/android-ndk
+      NDK_VERSION:          ${{ inputs.ndk_version }}
+      API_LEVEL:            ${{ inputs.api_level }}
       ENABLE_TIMELINE_HACK: ${{ inputs.enable_timeline_hack }}
-      ENABLE_UBWC_HACK: ${{ inputs.enable_ubwc_hack }}
-      APPLY_PATCH_SERIES: ${{ inputs.apply_patch_series }}
-      ENABLE_PERF: ${{ inputs.enable_perf }}
-      ENABLE_CUSTOM_FLAGS: ${{ inputs.enable_custom_flags }}
-      CUSTOM_TU_DEBUG: ${{ inputs.custom_tu_debug }}
-      CFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only' || '-O2' }}
-      CXXFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-exceptions' || '-O2' }}
-      LDFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-Wl,--gc-sections -Wl,--icf=safe' || '' }}
-      NDK_PATH: ${{ github.workspace }}/android-ndk
-      API_LEVEL: ${{ inputs.api_level || '35' }}
-      NDK_VERSION: ${{ inputs.ndk_version || 'android-ndk-r29' }}
+      ENABLE_UBWC_HACK:     ${{ inputs.enable_ubwc_hack }}
+      APPLY_PATCH_SERIES:   ${{ inputs.apply_patch_series }}
+      ENABLE_EXT_SPOOF:     ${{ inputs.enable_ext_spoof }}
+      ENABLE_DECK_EMU:      ${{ inputs.enable_deck_emu }}
+      DECK_EMU_TARGET:      ${{ inputs.deck_emu_target }}
+      ENABLE_PERF:          ${{ inputs.enable_perf }}
+      ENABLE_CUSTOM_FLAGS:  ${{ inputs.enable_custom_flags }}
+      CUSTOM_TU_DEBUG:      ${{ inputs.custom_tu_debug }}
+      CFLAGS_EXTRA: >-
+        ${{ inputs.enable_perf == true
+            && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only'
+            || '-O2' }}
+      CXXFLAGS_EXTRA: >-
+        ${{ inputs.enable_perf == true
+            && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-exceptions'
+            || '-O2' }}
+      LDFLAGS_EXTRA: >-
+        ${{ inputs.enable_perf == true
+            && '-Wl,--gc-sections -Wl,--icf=safe'
+            || '' }}
       BUILD_SCRIPT: "build_turnip.sh"
 
     steps:
@@ -208,63 +238,70 @@ jobs:
             pip3 install --break-system-packages --upgrade meson
           fi
           pip3 install --break-system-packages mako pyyaml
+          ccache --max-size=2G
 
       - name: Cache Android NDK
         id: cache-ndk
         uses: actions/cache@v4
         with:
           path: ${{ env.NDK_PATH }}
-          key: ${{ env.NDK_VERSION }}-${{ env.CACHE_VERSION }}
+          key: ndk-${{ env.NDK_VERSION }}-${{ env.CACHE_VERSION }}
           restore-keys: |
-            ${{ env.NDK_VERSION }}-
+            ndk-${{ env.NDK_VERSION }}-
 
       - name: Setup Android NDK
         if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
-          curl -sL "https://dl.google.com/android/repository/${{ env.NDK_VERSION }}-linux.zip" -o ndk.zip
+          curl -sL "https://dl.google.com/android/repository/${{ env.NDK_VERSION }}-linux.zip" \
+            -o ndk.zip
           unzip -q ndk.zip
-          mv ${{ env.NDK_VERSION }} "${{ env.NDK_PATH }}"
+          mv "${{ env.NDK_VERSION }}" "${{ env.NDK_PATH }}"
           rm ndk.zip
 
-      - name: Cache Mesa source
-        id: cache-mesa
+      - name: Cache ccache
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/mesa-cache
-          key: mesa-${{ needs.pre-check.outputs.mesa_ref }}-${{ hashFiles('build_turnip.sh') }}
+          path: ~/.cache/ccache
+          key: ccache-${{ matrix.target }}-${{ matrix.variant }}-${{ needs.pre-check.outputs.mesa_ref }}-${{ env.CACHE_VERSION }}
           restore-keys: |
-            mesa-${{ needs.pre-check.outputs.mesa_ref }}-
+            ccache-${{ matrix.target }}-${{ matrix.variant }}-
+            ccache-${{ matrix.target }}-
 
       - name: Cache Meson subproject downloads
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/build/mesa/subprojects/packagecache
-          key: meson-wraps-${{ needs.pre-check.outputs.mesa_ref }}-v1
+          key: meson-wraps-${{ needs.pre-check.outputs.mesa_ref }}-${{ env.CACHE_VERSION }}
           restore-keys: |
             meson-wraps-${{ needs.pre-check.outputs.mesa_ref }}-
             meson-wraps-
 
       - name: Prepare build script
-        run: |
-          chmod +x "${{ env.BUILD_SCRIPT }}"
+        run: chmod +x "${{ env.BUILD_SCRIPT }}"
 
       - name: Build Turnip Driver
         id: build
         run: |
           start_time=$(date +%s)
           if ! bash "${{ env.BUILD_SCRIPT }}"; then
-            echo "Build failed"
+            echo "Build script exited with error"
             exit 1
           fi
           end_time=$(date +%s)
           duration=$((end_time - start_time))
           echo "Build completed in $((duration/60))m $((duration%60))s"
           if [[ -d "build" ]]; then
-            echo "filename=$(ls build/turnip_*.zip 2>/dev/null | head -1 | xargs basename)" >> $GITHUB_OUTPUT
-            echo "version=$(cat build/version.txt 2>/dev/null || echo 'unknown')" >> $GITHUB_OUTPUT
-            echo "commit=$(cat build/commit.txt 2>/dev/null | head -c 8)" >> $GITHUB_OUTPUT
-            echo "vulkan=$(cat build/vulkan_version.txt 2>/dev/null || echo '1.4.0')" >> $GITHUB_OUTPUT
+            zip_file=$(ls build/turnip_*.zip 2>/dev/null | head -1)
+            if [[ -n "$zip_file" ]]; then
+              echo "filename=$(basename "$zip_file")" >> $GITHUB_OUTPUT
+              echo "zip_path=$zip_file"              >> $GITHUB_OUTPUT
+            fi
+            echo "version=$(cat build/version.txt 2>/dev/null || echo 'unknown')"         >> $GITHUB_OUTPUT
+            echo "commit=$(cat build/commit.txt 2>/dev/null | head -c 8)"                 >> $GITHUB_OUTPUT
+            echo "vulkan=$(cat build/vulkan_version.txt 2>/dev/null || echo '1.4.0')"     >> $GITHUB_OUTPUT
+            echo "build_date=$(cat build/build_date.txt 2>/dev/null || date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
           fi
+          ccache --show-stats --verbose || true
 
       - name: Verify build output
         run: |
@@ -284,35 +321,42 @@ jobs:
           compression-level: 0
 
       - name: Create GitHub Release
-        if: inputs.create_release == true
+        if: inputs.create_release == true && steps.build.outputs.filename != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "turnip-${{ steps.build.outputs.version }}-${{ steps.build.outputs.commit }}"
-          name: "Turnip ${{ steps.build.outputs.version }} (${{ inputs.target_gpu }})"
+          name: "Turnip ${{ steps.build.outputs.version }} (${{ inputs.target_gpu }}) [${{ inputs.build_variant }}]"
           body: |
-            ## Turnip Vulkan Driver Build
+            ## Turnip Vulkan Driver ${{ steps.build.outputs.version }}
 
-            | Property | Value |
-            |----------|-------|
-            | Version | `${{ steps.build.outputs.version }}` |
-            | Commit | `${{ steps.build.outputs.commit }}` |
-            | Vulkan | `${{ steps.build.outputs.vulkan }}` |
-            | GPU Target | `${{ inputs.target_gpu }}` |
-            | Build Type | `${{ inputs.build_type }}` |
-            | Variant | `${{ inputs.build_variant }}` |
+            | Property     | Value |
+            |--------------|-------|
+            | Mesa Version | `${{ steps.build.outputs.version }}` |
+            | Commit       | `${{ steps.build.outputs.commit }}` |
+            | Vulkan API   | `${{ steps.build.outputs.vulkan }}` |
+            | GPU Target   | `${{ inputs.target_gpu }}` |
+            | Build Type   | `${{ inputs.build_type }}` |
+            | Variant      | `${{ inputs.build_variant }}` |
+            | NDK          | `${{ inputs.ndk_version }}` |
+            | API Level    | `${{ inputs.api_level }}` |
+            | Mesa Source  | `${{ inputs.mesa_source }}` |
+            | Build Date   | `${{ steps.build.outputs.build_date }}` |
 
-            ### Enabled Features:
-            ${{ inputs.enable_ext_spoof == true && '- Vulkan Extensions Spoofing' || '' }}
-            ${{ inputs.enable_deck_emu == true && format('- Deck Emulation (spoof as {0})', inputs.deck_emu_target) || '' }}
+            ### Features
+            ${{ inputs.enable_ext_spoof == true && '- Vulkan Extensions Unlock' || '' }}
+            ${{ inputs.enable_deck_emu == true && format('- Deck Emulation: {0}', inputs.deck_emu_target) || '' }}
             ${{ inputs.enable_timeline_hack == true && '- Timeline Semaphore Optimization' || '' }}
-            ${{ inputs.enable_ubwc_hack == true && '- UBWC 5/6 Support (A8xx)' || '' }}
-            ${{ inputs.enable_perf == true && '- Performance Flags (-O3 + LTO + ARMv8.2-A)' || '' }}
-            ${{ inputs.enable_custom_flags == true && format('- Custom TU_DEBUG Flags: {0}', inputs.custom_tu_debug) || '' }}
+            ${{ inputs.enable_ubwc_hack == true && '- UBWC 5/6 Support' || '' }}
+            ${{ inputs.enable_perf == true && '- Performance Flags (-O3 + ARMv8.2-A)' || '' }}
+            ${{ inputs.enable_custom_flags == true && format('- TU_DEBUG: {0}', inputs.custom_tu_debug) || '' }}
 
-            ---
+            ### Winlator Usage
+            ```
+            TU_DEBUG=${{ inputs.enable_custom_flags == true && inputs.custom_tu_debug || 'turbo' }}${{ inputs.enable_deck_emu == true && ',deck_emu' || '' }}
+            ```
+
             Compiled from Mesa freedreno
-          files: |
-            build/*.zip
+          files: build/*.zip
           draft: ${{ inputs.release_as_draft }}
           prerelease: ${{ inputs.build_variant == 'debug' || inputs.build_variant == 'profile' }}
           generate_release_notes: false
@@ -322,22 +366,21 @@ jobs:
       - name: Build Summary
         if: always()
         run: |
-          echo ""
-          echo "Turnip Build Summary"
-          echo "  Status     : ${{ job.status }}"
-          echo "  GPU Target : ${{ inputs.target_gpu }}"
-          echo "  Mesa Ref   : ${{ needs.pre-check.outputs.mesa_ref }}"
-          echo "  Variant    : ${{ inputs.build_variant }}"
+          echo "Status        : ${{ job.status }}"
+          echo "GPU Target    : ${{ inputs.target_gpu }}"
+          echo "Build Variant : ${{ inputs.build_variant }}"
+          echo "Mesa Source   : ${{ inputs.mesa_source }}"
+          echo "Mesa Ref      : ${{ needs.pre-check.outputs.mesa_ref }}"
+          echo "NDK           : ${{ inputs.ndk_version }} (API ${{ inputs.api_level }})"
           if [[ -f "build/version.txt" ]]; then
-            echo "  Version    : $(cat build/version.txt)"
-            echo "  Commit     : $(cat build/commit.txt)"
+            echo "Version       : $(cat build/version.txt)"
+            echo "Commit        : $(cat build/commit.txt)"
+            echo "Vulkan API    : $(cat build/vulkan_version.txt 2>/dev/null || echo N/A)"
           fi
-          echo "  Artifacts  : $(ls build/*.zip 2>/dev/null | wc -l) file(s)"
+          echo "Artifacts     : $(ls build/*.zip 2>/dev/null | wc -l) file(s)"
           if [[ "${{ inputs.enable_custom_flags }}" == "true" ]]; then
-            echo "  TU_DEBUG   : ${{ inputs.custom_tu_debug }}"
-            echo "  Winlator   : TU_DEBUG=${{ inputs.custom_tu_debug }}"
+            echo "TU_DEBUG      : ${{ inputs.custom_tu_debug }}"
           fi
-          echo ""
 
   notify-on-failure:
     needs: build-turnip
@@ -347,4 +390,4 @@ jobs:
       - name: Notify build failure
         run: |
           echo "Build failed for Turnip Driver"
-          echo "Check workflow logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
