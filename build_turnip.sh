@@ -292,8 +292,7 @@ PYEOF
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-field = '   bool disable_gmem;
-'
+field = "   bool disable_gmem;\n"
 inserted = False
 for pat in [
     r'bool\s+has_\w+;',
@@ -302,8 +301,7 @@ for pat in [
 ]:
     all_m = list(re.finditer(pat, c))
     if all_m:
-        eol = c.find('
-', all_m[-1].end())
+        eol = c.find("\n", all_m[-1].end())
         c = c[:eol+1] + field + c[eol+1:]
         inserted = True
         break
@@ -311,8 +309,7 @@ if not inserted:
     m = re.search(r'(struct\s+fd_dev_info\s*\{)', c)
     if m:
         ins = c.find('{', m.start()) + 1
-        eol = c.find('
-', ins)
+        eol = c.find("\n", ins)
         c = c[:eol+1] + field + c[eol+1:]
         inserted = True
 if inserted:
@@ -329,16 +326,11 @@ PYEOF
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-inject = '
-   /* A8XX_DISABLE_GMEM */
-   if (cmd->device->physical_device->dev_info.disable_gmem)
-      return true;
-'
+inject = "\n   /* A8XX_DISABLE_GMEM */\n   if (cmd->device->physical_device->dev_info.disable_gmem)\n      return true;\n"
 pat = r'(use_sysmem_rendering\s*\([^)]*\)\s*\{)'
 m = re.search(pat, c)
 if m:
-    ins = c.find('
-', c.find('{', m.start())) + 1
+    ins = c.find("\n", c.find('{', m.start())) + 1
     c = c[:ins] + inject + c[ins:]
     with open(fp, 'w') as f: f.write(c)
     print('[OK] disable_gmem guard added to use_sysmem_rendering')
@@ -1080,7 +1072,7 @@ package_driver() {
     cat > "${pkg_dir}/meta.json" << EOF
 {
   "schemaVersion": 1,
-  "name": "Turnip Unified (a7xx + a8xx)",
+  "name": "Turnip Unified",
   "description": "Compiled From Mesa Freedreno",
   "author": "BlueInstruction",
   "packageVersion": "1",
