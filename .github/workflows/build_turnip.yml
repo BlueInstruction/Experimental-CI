@@ -123,6 +123,11 @@ on:
         required: false
         default: "push_regs,ubwc_all,defrag,unroll"
 
+      build_number:
+        description: "Build number (e.g. 1 -> Turnip-26.1.0-B1)"
+        required: false
+        default: "1"
+
       create_release:
         type: boolean
         description: "Create GitHub Release"
@@ -195,6 +200,7 @@ jobs:
       ENABLE_PERF:          ${{ inputs.enable_perf }}
       ENABLE_CUSTOM_FLAGS:  ${{ inputs.enable_custom_flags }}
       CUSTOM_TU_DEBUG:      ${{ inputs.custom_tu_debug }}
+      BUILD_NUMBER:         ${{ inputs.build_number }}
       CFLAGS_EXTRA: >-
         ${{ inputs.enable_perf == true
             && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only'
@@ -315,8 +321,8 @@ jobs:
         if: inputs.create_release == true && steps.build.outputs.filename != ''
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "turnip-${{ steps.build.outputs.version }}-${{ steps.build.outputs.commit }}"
-          name: "Turnip ${{ steps.build.outputs.version }} (a7xx + a8xx) [${{ inputs.build_variant }}]"
+          tag_name: "Turnip-${{ steps.build.outputs.version }}-B${{ inputs.build_number }}"
+          name: "Turnip-${{ steps.build.outputs.version }}-B${{ inputs.build_number }}"
           body: |
             ## Turnip Unified Vulkan Driver ${{ steps.build.outputs.version }}
 
@@ -342,11 +348,6 @@ jobs:
             ${{ inputs.enable_perf == true && '- Performance Flags (-O3 + ARMv8.2-A)' || '' }}
             ${{ inputs.enable_custom_flags == true && format('- TU_DEBUG: {0}', inputs.custom_tu_debug) || '' }}
 
-            ### Winlator Usage
-            ```
-            Driver: vulkan.ad00xx.so
-            TU_DEBUG=${{ inputs.enable_custom_flags == true && inputs.custom_tu_debug || 'turbo' }}
-            ```
 
             Compiled from Mesa freedreno
           files: build/*.zip
