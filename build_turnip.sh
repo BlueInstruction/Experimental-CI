@@ -255,36 +255,11 @@ apply_a8xx_patches() {
     local gmem_cache="${MESA_DIR}/src/freedreno/common/fd6_gmem_cache.h"
     local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
 
-    if [[ "$ENABLE_UBWC_HACK" == "true" ]] && [[ -f "$kgsl_file" ]] && ! grep -q "UBWC_56_APPLIED" "$kgsl_file"; then
-        python3 - "$kgsl_file" << 'PYEOF'
+    if [[ "$ENABLE_UBWC_HACK" == "true" ]] && [[ -f "$kgsl_file" ]]; then
+        python3 - "$kgsl_file" << 'INNEREOF'
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-
-if 'bank_swizzle_levels' not in c:
-    print('[WARN] bank_swizzle_levels not found in kgsl file - skipping UBWC 5/6 injection')
-    sys.exit(0)
-
-var_m = re.search(r'(\w+)\.bank_swizzle_levels|(\w+)->bank_swizzle_levels', c)
-if not var_m:
-    print('[WARN] Could not determine ubwc config variable name - skipping')
-    sys.exit(0)
-var = (var_m.group(1) or var_m.group(2))
-
-ubwc_pat = re.compile(r'case\s+KGSL_UBWC_4_0\s*:.*?break\s*;', re.DOTALL)
-m4 = ubwc_pat.search(c)
-if not m4:
-    ubwc_pat = re.compile(r'case\s+KGSL_UBWC_3_0\s*:.*?break\s*;', re.DOTALL)
-    m4 = ubwc_pat.search(c)
-
-if not m4:
-    print('[WARN] KGSL UBWC switch not found - skipping')
-    sys.exit(0)
-
-default_m = re.search(r'([ 	]*default\s*:)', c[m4.end():])
-if not default_m:
-    print('[WARN] default: case not found - skipping')
-    sys.exit(0)
 
 defines = (
     "\n#ifndef KGSL_UBWC_5_0\n"
@@ -294,35 +269,68 @@ defines = (
     "#define KGSL_UBWC_6_0 6\n"
     "#endif\n"
 )
-first_include = c.find("#include")
-if first_include != -1 and "KGSL_UBWC_5_0" not in c:
-    eol = c.find("\n", first_include)
-    c = c[:eol+1] + defines + c[eol+1:]
 
+if "#define KGSL_UBWC_5_0" not in c:
+    first_include = c.find("#include")
+    if first_include != -1:
+        eol = c.find("\n", first_include)
+        c = c[:eol+1] + defines + c[eol+1:]
+        print("[OK] KGSL_UBWC_5_0/6_0 defines added")
+    else:
+        print("[WARN] No #include found, skipping defines")
+        sys.exit(0)
+else:
+    print("[OK] KGSL_UBWC_5_0 already defined")
+
+if "case KGSL_UBWC_5_0" in c:
+    with open(fp, "w") as f: f.write(c)
+    print("[OK] UBWC 5/6 cases already present from patch series")
+    sys.exit(0)
+
+ubwc_pat = re.compile(r"case KGSL_UBWC_4_0.*?break;", re.DOTALL)
 m4 = ubwc_pat.search(c)
 if not m4:
-    print('[WARN] Pattern lost after defines injection')
+    ubwc_pat = re.compile(r"case KGSL_UBWC_3_0.*?break;", re.DOTALL)
+    m4 = ubwc_pat.search(c)
+
+if not m4:
+    with open(fp, "w") as f: f.write(c)
+    print("[WARN] UBWC switch not found, defines only")
     sys.exit(0)
-default_m = re.search(r'([ 	]*default\s*:)', c[m4.end():])
+
+ctx_before = c[max(0, m4.start()-800):m4.start()]
+var_m = re.search(r"(\w+)\.(bank_swizzle_levels|macrotile_mode)", ctx_before)
+arrow = "."
+if not var_m:
+    var_m = re.search(r"(\w+)->(bank_swizzle_levels|macrotile_mode)", ctx_before)
+    arrow = "->"
+if not var_m:
+    with open(fp, "w") as f: f.write(c)
+    print("[WARN] ubwc var not found, defines only")
+    sys.exit(0)
+
+var = var_m.group(1)
+default_m = re.search(r"[ \t]*default\s*:", c[m4.end():])
 if not default_m:
+    with open(fp, "w") as f: f.write(c)
+    print("[WARN] default: not found, defines only")
     sys.exit(0)
 
 ins = m4.end() + default_m.start()
 inject = (
-    f"   case KGSL_UBWC_5_0:\n"
-    f"      {var}.bank_swizzle_levels = 0x4;\n"
-    f"      {var}.macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n"
-    f"      break;\n"
-    f"   case KGSL_UBWC_6_0:\n"
-    f"      {var}.bank_swizzle_levels = 0x6;\n"
-    f"      {var}.macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n"
-    f"      break;\n"
-    f"   /* UBWC_56_APPLIED */\n"
+    "   case KGSL_UBWC_5_0:\n"
+    f"      {var}{arrow}bank_swizzle_levels = 0x4;\n"
+    f"      {var}{arrow}macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n"
+    "      break;\n"
+    "   case KGSL_UBWC_6_0:\n"
+    f"      {var}{arrow}bank_swizzle_levels = 0x6;\n"
+    f"      {var}{arrow}macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n"
+    "      break;\n"
 )
 c = c[:ins] + inject + c[ins:]
 with open(fp, "w") as f: f.write(c)
-print(f"[OK] UBWC 5.0/6.0 inserted using var={var}.")
-PYEOF
+print(f"[OK] UBWC 5/6 cases inserted (var={var}{arrow})")
+INNEREOF
         log_success "UBWC 5.0/6.0 support applied"
     fi
 
@@ -1062,23 +1070,16 @@ package_driver() {
         "${pkg_dir}/${driver_name}" 2>/dev/null || true
     local driver_size
     driver_size=$(du -h "${pkg_dir}/${driver_name}" | cut -f1)
-    local variant_suffix
-    case "$BUILD_VARIANT" in
-        optimized) variant_suffix="opt"     ;;
-        autotuner) variant_suffix="at"      ;;
-        vanilla)   variant_suffix="vanilla" ;;
-        debug)     variant_suffix="debug"   ;;
-        profile)   variant_suffix="profile" ;;
-        *)         variant_suffix="opt"     ;;
-    esac
-    local filename="turnip_a0xx_v${version}_${variant_suffix}_${build_date}"
+    local build_num="${BUILD_NUMBER:-1}"
+    local release_name="Turnip-${version}-B${build_num}"
+    local filename="${release_name}"
     cat > "${pkg_dir}/meta.json" << EOF
 {
   "schemaVersion": 1,
-  "name": "Turnip Unified (a7xx + a8xx)",
+  "name": "${release_name}",
   "description": "Compiled From Mesa Freedreno",
   "author": "BlueInstruction",
-  "packageVersion": "1",
+  "packageVersion": "${build_num}",
   "vendor": "Mesa",
   "driverVersion": "${vulkan_version}",
   "minApi": 28,
@@ -1086,6 +1087,7 @@ package_driver() {
 }
 EOF
     echo "$filename"        > "${WORKDIR}/filename.txt"
+    echo "$release_name"    > "${WORKDIR}/release_name.txt"
     echo "$vulkan_version"  > "${WORKDIR}/vulkan_version.txt"
     echo "$build_date"      > "${WORKDIR}/build_date.txt"
     cd "$pkg_dir"
