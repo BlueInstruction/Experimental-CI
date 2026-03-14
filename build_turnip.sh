@@ -270,15 +270,8 @@ for hdr in [kgsl_header,
         with open(hdr) as f: h = f.read()
         if 'KGSL_UBWC_5_0' not in h:
             with open(hdr, 'a') as f:
-                f.write('
-#ifndef KGSL_UBWC_5_0
-#define KGSL_UBWC_5_0 5
-#endif
-')
-                f.write('#ifndef KGSL_UBWC_6_0
-#define KGSL_UBWC_6_0 6
-#endif
-')
+                f.write("\n#ifndef KGSL_UBWC_5_0\n#define KGSL_UBWC_5_0 5\n#endif\n")
+                f.write("#ifndef KGSL_UBWC_6_0\n#define KGSL_UBWC_6_0 6\n#endif\n")
             print(f'[OK] KGSL_UBWC_5_0/6_0 defined in {os.path.basename(hdr)}')
         break
 
@@ -1079,7 +1072,7 @@ package_driver() {
     cat > "${pkg_dir}/meta.json" << EOF
 {
   "schemaVersion": 1,
-  "name": "Turnip Unified",
+  "name": "Turnip Unified (a7xx + a8xx)",
   "description": "Compiled From Mesa Freedreno",
   "author": "BlueInstruction",
   "packageVersion": "1",
