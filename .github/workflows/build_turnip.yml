@@ -288,7 +288,7 @@ jobs:
           duration=$((end_time - start_time))
           echo "Build completed in $((duration/60))m $((duration%60))s"
           if [[ -d "build" ]]; then
-            zip_file=$(ls build/turnip_*.zip 2>/dev/null | head -1)
+            zip_file=$(ls build/Turnip-*.zip 2>/dev/null | head -1)
             if [[ -n "$zip_file" ]]; then
               echo "filename=$(basename "$zip_file")" >> $GITHUB_OUTPUT
               echo "zip_path=$zip_file"              >> $GITHUB_OUTPUT
@@ -347,7 +347,6 @@ jobs:
             ${{ inputs.enable_ubwc_hack == true && '- UBWC 5/6 Support' || '' }}
             ${{ inputs.enable_perf == true && '- Performance Flags (-O3 + ARMv8.2-A)' || '' }}
             ${{ inputs.enable_custom_flags == true && format('- TU_DEBUG: {0}', inputs.custom_tu_debug) || '' }}
-
 
             Compiled from Mesa freedreno
           files: build/*.zip
