@@ -118,10 +118,20 @@ on:
         description: "Enable custom TU_DEBUG flags"
         default: true
 
+
+      enable_a7xx_compat:
+        type: boolean
+        description: "Apply a7xx compat patches (branch_and_or, workgroup_mem, constlen)"
+        default: true
+
+      enable_a7xx_perf:
+        type: boolean
+        description: "Apply a7xx perf patches (LRZ preseed, storage UBWC, wave64, mesh cap)"
+        default: true
       custom_tu_debug:
         description: "Custom TU_DEBUG flags (comma-separated)"
         required: false
-        default: "push_regs,ubwc_all,defrag,unroll"
+        default: "perf,noconform,fdm,log_skip_gmem_ops"
 
       build_number:
         description: "Build number (e.g. 1 -> Turnip-26.1.0-B1)"
@@ -198,6 +208,8 @@ jobs:
       ENABLE_DECK_EMU:      ${{ inputs.enable_deck_emu }}
       DECK_EMU_TARGET:      ${{ inputs.deck_emu_target }}
       ENABLE_PERF:          ${{ inputs.enable_perf }}
+      ENABLE_A7XX_COMPAT:  ${{ inputs.enable_a7xx_compat }}
+      ENABLE_A7XX_PERF:    ${{ inputs.enable_a7xx_perf }}
       ENABLE_CUSTOM_FLAGS:  ${{ inputs.enable_custom_flags }}
       CUSTOM_TU_DEBUG:      ${{ inputs.custom_tu_debug }}
       BUILD_NUMBER:         ${{ inputs.build_number }}
@@ -340,12 +352,31 @@ jobs:
             | API Level    | `${{ inputs.api_level }}` |
             | Build Date   | `${{ steps.build.outputs.build_date }}` |
 
+            ### TU_DEBUG (Winlator EnvVars)
+
+            | Winlator UI Name | Function |
+            |------------------|----------|
+            | `perf` | GPU turbo mode (sysfs min_pwrlevel) |
+            | `push_consts_per_stage` | Double register file (push_regs) |
+            | `noconform` | Force UBWC on all images |
+            | `bos` | SLC cache pin |
+            | `dynamic` | Force variable rate shading |
+            | `fdm` | Defrag render passes |
+            | `rd` | CP prefetch optimization |
+            | `3d_load` | Shuffle instruction hint |
+            | `rast_order` | VGT prefetch hint |
+            | `log_skip_gmem_ops` | Loop unroll hint |
+
+            > In Winlator: Container Settings → Environment Variables → TU_DEBUG
+
             ### Features
             ${{ inputs.enable_ext_spoof == true && '- Vulkan Extensions Unlock (300+)' || '' }}
             ${{ inputs.enable_deck_emu == true && format('- GPU Spoof: {0}', inputs.deck_emu_target) || '' }}
             ${{ inputs.enable_timeline_hack == true && '- Timeline Semaphore Optimization' || '' }}
             ${{ inputs.enable_ubwc_hack == true && '- UBWC 5/6 Support' || '' }}
             ${{ inputs.enable_perf == true && '- Performance Flags (-O3 + ARMv8.2-A)' || '' }}
+            ${{ inputs.enable_a7xx_compat == true && '- a7xx Compat Patches' || '' }}
+            ${{ inputs.enable_a7xx_perf == true && '- a7xx Performance Patches' || '' }}
             ${{ inputs.enable_custom_flags == true && format('- TU_DEBUG: {0}', inputs.custom_tu_debug) || '' }}
 
             Compiled from Mesa freedreno
