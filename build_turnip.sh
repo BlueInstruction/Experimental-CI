@@ -302,18 +302,43 @@ if not m4:
     print("[WARN] UBWC switch not found, defines only")
     sys.exit(0)
 
-ctx_before = c[max(0, m4.start()-800):m4.start()]
-var_m = re.search(r"(\w+)\.(bank_swizzle_levels|macrotile_mode)", ctx_before)
+# Find function boundary containing the switch — search within same function
+# Go back from m4 to find opening brace of enclosing function
+func_start = c.rfind('\n{\n', 0, m4.start())
+if func_start == -1:
+    func_start = max(0, m4.start() - 4000)
+
+# Search for var in the switch body itself first, then function scope
+switch_ctx = c[func_start:m4.end()]
+var_m = re.search(r"(\w+)\.(bank_swizzle_levels|macrotile_mode)", switch_ctx)
 arrow = "."
 if not var_m:
-    var_m = re.search(r"(\w+)->(bank_swizzle_levels|macrotile_mode)", ctx_before)
+    var_m = re.search(r"(\w+)->(bank_swizzle_levels|macrotile_mode)", switch_ctx)
     arrow = "->"
+
+# If still not found, look at the case block itself for the assignment pattern
+if not var_m:
+    case_body = c[m4.start():m4.end()]
+    var_m = re.search(r"(\w+)\.(bank_swizzle_levels|macrotile_mode)", case_body)
+    if not var_m:
+        var_m = re.search(r"(\w+)->(bank_swizzle_levels|macrotile_mode)", case_body)
+        if var_m: arrow = "->"
+
 if not var_m:
     with open(fp, "w") as f: f.write(c)
-    print("[WARN] ubwc var not found, defines only")
+    print("[WARN] ubwc var not found in function scope, defines only")
     sys.exit(0)
 
 var = var_m.group(1)
+
+# Verify var is declared in the enclosing function before the switch
+pre_switch = c[func_start:m4.start()]
+decl_pat = rf'\b{re.escape(var)}\b'
+if not re.search(decl_pat, pre_switch):
+    with open(fp, "w") as f: f.write(c)
+    print(f"[WARN] var '{var}' not declared before switch in function scope — defines only")
+    sys.exit(0)
+
 default_m = re.search(r"[ \t]*default\s*:", c[m4.end():])
 if not default_m:
     with open(fp, "w") as f: f.write(c)
