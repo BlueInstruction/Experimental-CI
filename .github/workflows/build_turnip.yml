@@ -128,6 +128,16 @@ on:
         type: boolean
         description: "Apply a7xx perf patches (LRZ preseed, storage UBWC, wave64, mesh cap)"
         default: true
+
+      enable_vk14_promo:
+        type: boolean
+        description: "Force Vulkan 1.4 + subgroup/descriptor buffer features"
+        default: true
+
+      enable_shader_perf:
+        type: boolean
+        description: "Shader compiler perf (unroll, max_const, NIR opts)"
+        default: true
       custom_tu_debug:
         description: "Custom TU_DEBUG flags (comma-separated)"
         required: false
@@ -210,6 +220,8 @@ jobs:
       ENABLE_PERF:          ${{ inputs.enable_perf }}
       ENABLE_A7XX_COMPAT:  ${{ inputs.enable_a7xx_compat }}
       ENABLE_A7XX_PERF:    ${{ inputs.enable_a7xx_perf }}
+      ENABLE_VK14_PROMO:   ${{ inputs.enable_vk14_promo }}
+      ENABLE_SHADER_PERF:  ${{ inputs.enable_shader_perf }}
       ENABLE_CUSTOM_FLAGS:  ${{ inputs.enable_custom_flags }}
       CUSTOM_TU_DEBUG:      ${{ inputs.custom_tu_debug }}
       BUILD_NUMBER:         ${{ inputs.build_number }}
@@ -377,6 +389,8 @@ jobs:
             ${{ inputs.enable_perf == true && '- Performance Flags (-O3 + ARMv8.2-A)' || '' }}
             ${{ inputs.enable_a7xx_compat == true && '- a7xx Compat Patches' || '' }}
             ${{ inputs.enable_a7xx_perf == true && '- a7xx Performance Patches' || '' }}
+            ${{ inputs.enable_vk14_promo == true && '- Vulkan 1.4 Promotion (apiVersion + features)' || '' }}
+            ${{ inputs.enable_shader_perf == true && '- Shader Compiler Optimizations' || '' }}
             ${{ inputs.enable_custom_flags == true && format('- TU_DEBUG: {0}', inputs.custom_tu_debug) || '' }}
 
             Compiled from Mesa freedreno
