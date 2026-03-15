@@ -333,7 +333,9 @@ INNEREOF
         log_success "UBWC 5.0/6.0 support applied"
     fi
 
-    if [[ -f "$cmd_buffer" ]] && ! grep -q "A8XX_DISABLE_GMEM" "$cmd_buffer"; then
+    if [[ -f "$cmd_buffer" ]] \
+        && grep -q "disable_gmem" "$dev_info_h" \
+        && ! grep -q "A8XX_DISABLE_GMEM" "$cmd_buffer"; then
         python3 - "$cmd_buffer" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
@@ -997,7 +999,12 @@ PYEOF
 apply_sysmem_mode_fix() {
     log_info "Fixing sysmem mode gating"
     local cmd_buffer="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
+    local dev_info_h="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"
     [[ ! -f "$cmd_buffer" ]] && { log_warn "tu_cmd_buffer.cc not found"; return 0; }
+    if [[ ! -f "$dev_info_h" ]] || ! grep -q "disable_gmem" "$dev_info_h"; then
+        log_warn "disable_gmem not in freedreno_dev_info.h — skipping sysmem fix"
+        return 0
+    fi
     python3 - "$cmd_buffer" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
@@ -1081,7 +1088,10 @@ PYEOF
         log_success "UBWC disabled for storage images"
     fi
 
-    if [[ -f "$ir3_compiler" ]] && ! grep -q "A7XX_CS_WAVE64" "$ir3_compiler"; then
+    local ir3_compiler_h="${MESA_DIR}/src/freedreno/ir3/ir3_compiler.h"
+    if [[ -f "$ir3_compiler" ]] && [[ -f "$ir3_compiler_h" ]] \
+        && grep -q "cs_wave64" "$ir3_compiler_h" \
+        && ! grep -q "A7XX_CS_WAVE64" "$ir3_compiler"; then
         python3 - "$ir3_compiler" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
