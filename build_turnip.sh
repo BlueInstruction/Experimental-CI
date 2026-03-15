@@ -459,12 +459,81 @@ PYEOF
     log_success "A8xx patches complete"
 }
 
+
+apply_vulkan_extensions_vk_fallback() {
+    log_info "Applying extensions via vk_device_extensions fallback"
+    local vk_ext_h="${MESA_DIR}/src/vulkan/util/vk_extensions.py"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found for ext fallback"; return 0; }
+    if grep -q "EXT_FALLBACK_APPLIED" "$tu_device_cc"; then
+        log_info "Extension fallback already applied"
+        return 0
+    fi
+    python3 - "$tu_device_cc" << 'INNEREOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+
+NEVER_UNLOCK = {
+    "KHR_workgroup_memory_explicit_layout",
+    "KHR_portability_subset",
+    "EXT_validation_cache",
+    "EXT_validation_features",
+    "EXT_validation_flags",
+    "ANDROID_native_buffer",
+    "KHR_display",
+    "KHR_display_swapchain",
+    "EXT_direct_mode_display",
+    "EXT_acquire_drm_display",
+    "EXT_acquire_xlib_display",
+}
+
+n = 0
+for pat in [
+    r'(\.[A-Z]+_[A-Z0-9_]+\s*=\s*)false\b',
+    r'(\.[A-Z]+_[A-Z0-9_]+\s*=\s*)VK_FALSE\b',
+]:
+    for m in re.finditer(pat, c):
+        field = m.group(1).strip().lstrip('.')
+        field_name = re.match(r'(\w+)', field).group(1)
+        skip = any(nv.replace('_', '').lower() in field_name.replace('_', '').lower()
+                   for nv in NEVER_UNLOCK)
+        if not skip:
+            c = c[:m.start(2)] + 'true' + c[m.end(2):]
+            n += 1
+
+c += '\n/* EXT_FALLBACK_APPLIED */\n'
+with open(fp, 'w') as f: f.write(c)
+print(f'[OK] EXT fallback: flipped {n} extension bits in tu_device.cc')
+INNEREOF
+    log_success "Extension fallback applied"
+}
+
 apply_vulkan_extensions_support() {
     log_info "Applying Vulkan extensions unlock + upscaler stubs"
-    local tu_extensions="${MESA_DIR}/src/freedreno/vulkan/tu_extensions.py"
     local meson_build="${MESA_DIR}/src/freedreno/vulkan/meson.build"
     local stubs_cc="${MESA_DIR}/src/freedreno/vulkan/tu_upscaler_stubs.cc"
-    [[ ! -f "$tu_extensions" ]] && { log_warn "tu_extensions.py not found, skipping"; return 0; }
+    local tu_extensions=""
+    local _candidates=(
+        "${MESA_DIR}/src/freedreno/vulkan/tu_extensions.py"
+        "${MESA_DIR}/src/freedreno/vulkan/tu_device_ext.py"
+        "${MESA_DIR}/src/freedreno/vulkan/extensions.py"
+    )
+    for _f in "${_candidates[@]}"; do
+        [[ -f "$_f" ]] && { tu_extensions="$_f"; break; }
+    done
+    if [[ -z "$tu_extensions" ]]; then
+        local _vk_ext_py
+        _vk_ext_py=$(find "${MESA_DIR}/src/freedreno" -maxdepth 3 -name "*.py" 2>/dev/null \
+            | xargs grep -l 'Extension(' 2>/dev/null | head -1)
+        [[ -n "$_vk_ext_py" ]] && tu_extensions="$_vk_ext_py"
+    fi
+    if [[ -z "$tu_extensions" ]]; then
+        log_warn "No extension definition file found — trying vk_extensions fallback"
+        apply_vulkan_extensions_vk_fallback
+        return 0
+    fi
+    log_info "Found extension file: $tu_extensions"
     if grep -q "EXT_UNLOCK_APPLIED" "$tu_extensions"; then
         log_info "Extension unlock already applied"
         return 0
