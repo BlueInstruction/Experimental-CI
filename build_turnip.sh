@@ -302,33 +302,30 @@ if not m4:
     print("[WARN] UBWC switch not found, defines only")
     sys.exit(0)
 
-# Find the variable by looking INSIDE the existing case block (same scope)
-# The case 5/6 assignment needs the same var as case 4 or case 3
+# Find the FULL lvalue expression that writes bank_swizzle_levels/macrotile_mode
+# Pattern: device->ubwc_config.bank_swizzle_levels — must capture 'device->ubwc_config'
 case_body = c[m4.start():m4.end()]
-var_m = re.search(r"(\w+)\.(bank_swizzle_levels|macrotile_mode)", case_body)
-arrow = "."
-if not var_m:
-    var_m = re.search(r"(\w+)->(bank_swizzle_levels|macrotile_mode)", case_body)
-    if var_m:
-        arrow = "->"
 
-if not var_m:
-    # Fallback: look for any struct/ptr assignment in the case body
-    # e.g. 'info->ubwc_level_count = X' or 'cfg.field = X'
-    var_fb = re.search(r"(\w+)\.(\w+)\s*=", case_body)
-    if not var_fb:
-        var_fb = re.search(r"(\w+)->(\w+)\s*=", case_body)
-        if var_fb: arrow = "->"
-    if var_fb:
-        var_m = var_fb
-    else:
-        with open(fp, "w") as f: f.write(c)
-        print("[WARN] ubwc var not found in case body, defines only")
-        sys.exit(0)
+# Capture full expression: optional 'ptr->' prefix + struct name
+# e.g. 'device->ubwc_config.bank_swizzle_levels' -> lval='device->ubwc_config'
+# e.g. 'ubwc_config.bank_swizzle_levels'         -> lval='ubwc_config'
+lval_pat = re.compile(
+    r'((?:\w+->)?\w+)\.(bank_swizzle_levels|macrotile_mode)'
+)
+lval_m = lval_pat.search(case_body)
 
-var = var_m.group(1)
+if not lval_m:
+    # Fallback: any ptr->field or var.field assignment in the case body
+    lval_m = re.search(r'((?:\w+->)?\w+)\.(\w+)\s*=', case_body)
 
-default_m = re.search(r"[ \t]*default\s*:", c[m4.end():])
+if not lval_m:
+    with open(fp, "w") as f: f.write(c)
+    print("[WARN] ubwc lval not found in case body, defines only")
+    sys.exit(0)
+
+lval = lval_m.group(1)
+
+default_m = re.search(r'[ \t]*default\s*:', c[m4.end():])
 if not default_m:
     with open(fp, "w") as f: f.write(c)
     print("[WARN] default: not found, defines only")
@@ -338,13 +335,13 @@ ins = m4.end() + default_m.start()
 inject = (
     "   case 5:\n"
     "   case 6:\n"
-    f"      {var}{arrow}bank_swizzle_levels = 0x6;\n"
-    f"      {var}{arrow}macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n"
+    f"      {lval}.bank_swizzle_levels = 0x6;\n"
+    f"      {lval}.macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n"
     "      break;\n"
 )
 c = c[:ins] + inject + c[ins:]
 with open(fp, "w") as f: f.write(c)
-print(f"[OK] UBWC 5/6 cases inserted (var={var}{arrow})")
+print(f"[OK] UBWC 5/6 cases inserted (lval={lval}.)")
 INNEREOF
         log_success "UBWC 5.0/6.0 support applied"
     fi
