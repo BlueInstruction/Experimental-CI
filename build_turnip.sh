@@ -40,6 +40,8 @@ APPLY_PATCH_SERIES="${APPLY_PATCH_SERIES:-true}"
 ENABLE_CUSTOM_FLAGS="${ENABLE_CUSTOM_FLAGS:-true}"
 ENABLE_A7XX_COMPAT="${ENABLE_A7XX_COMPAT:-true}"
 ENABLE_A7XX_PERF="${ENABLE_A7XX_PERF:-true}"
+ENABLE_VK14_PROMO="${ENABLE_VK14_PROMO:-true}"
+ENABLE_SHADER_PERF="${ENABLE_SHADER_PERF:-true}"
 CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
 CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
 LDFLAGS_EXTRA="${LDFLAGS_EXTRA:--Wl,--gc-sections}"
@@ -334,7 +336,7 @@ INNEREOF
     fi
 
     if [[ -f "$cmd_buffer" ]] \
-        && grep -q "disable_gmem" "$dev_info_h" \
+        && grep -q "disable_gmem" "$dev_info_h" 2>/dev/null \
         && ! grep -q "A8XX_DISABLE_GMEM" "$cmd_buffer"; then
         python3 - "$cmd_buffer" << 'PYEOF'
 import sys, re
@@ -465,74 +467,25 @@ fp_meson = sys.argv[3]
 
 with open(fp_ext) as f: c = f.read()
 
-SAFE_UNLOCK = [
-    "VK_KHR_synchronization2","VK_KHR_dynamic_rendering","VK_KHR_dynamic_rendering_local_read",
-    "VK_KHR_shader_non_semantic_info","VK_KHR_shader_expect_assume","VK_KHR_shader_maximal_reconvergence",
-    "VK_KHR_shader_subgroup_rotate","VK_KHR_shader_subgroup_uniform_control_flow",
-    "VK_KHR_shader_quad_control","VK_KHR_shader_float_controls2","VK_KHR_shader_atomic_int64",
-    "VK_KHR_shader_float16_int8","VK_KHR_shader_clock","VK_KHR_compute_shader_derivatives",
-    "VK_KHR_cooperative_matrix","VK_KHR_global_priority","VK_KHR_performance_query",
-    "VK_KHR_pipeline_executable_properties","VK_KHR_pipeline_library",
-    "VK_KHR_ray_query","VK_KHR_ray_tracing_maintenance1","VK_KHR_ray_tracing_pipeline",
-    "VK_KHR_ray_tracing_position_fetch","VK_KHR_acceleration_structure",
-    "VK_KHR_deferred_host_operations","VK_KHR_fragment_shader_barycentric",
-    "VK_KHR_fragment_shading_rate","VK_KHR_present_id","VK_KHR_present_wait",
-    "VK_KHR_shared_presentable_image","VK_KHR_video_queue","VK_KHR_video_decode_queue",
-    "VK_KHR_video_decode_h264","VK_KHR_video_decode_h265",
-    "VK_EXT_descriptor_buffer","VK_EXT_descriptor_indexing","VK_EXT_mesh_shader",
-    "VK_EXT_shader_object","VK_EXT_shader_tile_image","VK_EXT_shader_stencil_export",
-    "VK_EXT_shader_atomic_float","VK_EXT_shader_atomic_float2",
-    "VK_EXT_shader_demote_to_helper_invocation","VK_EXT_shader_module_identifier",
-    "VK_EXT_shader_replicated_composites","VK_EXT_shader_subgroup_ballot",
-    "VK_EXT_shader_subgroup_vote","VK_EXT_shader_viewport_index_layer",
-    "VK_EXT_subgroup_size_control","VK_EXT_image_compression_control",
-    "VK_EXT_image_compression_control_swapchain","VK_EXT_image_robustness",
-    "VK_EXT_image_sliced_view_of_3d","VK_EXT_image_view_min_lod","VK_EXT_image_2d_view_of_3d",
-    "VK_EXT_filter_cubic","VK_EXT_fragment_density_map","VK_EXT_fragment_density_map2",
-    "VK_EXT_fragment_shader_interlock","VK_EXT_frame_boundary","VK_EXT_memory_budget",
-    "VK_EXT_memory_priority","VK_EXT_multi_draw","VK_EXT_multisampled_render_to_single_sampled",
-    "VK_EXT_mutable_descriptor_type","VK_EXT_non_seamless_cube_map","VK_EXT_opacity_micromap",
-    "VK_EXT_pageable_device_local_memory","VK_EXT_pipeline_creation_cache_control",
-    "VK_EXT_pipeline_creation_feedback","VK_EXT_pipeline_library_group_handles",
-    "VK_EXT_pipeline_protected_access","VK_EXT_pipeline_robustness","VK_EXT_post_depth_coverage",
-    "VK_EXT_primitives_generated_query","VK_EXT_primitive_topology_list_restart",
-    "VK_EXT_provoking_vertex","VK_EXT_rasterization_order_attachment_access","VK_EXT_robustness2",
-    "VK_EXT_sample_locations","VK_EXT_sampler_filter_minmax","VK_EXT_scalar_block_layout",
-    "VK_EXT_separate_stencil_usage","VK_EXT_subpass_merge_feedback","VK_EXT_swapchain_maintenance1",
-    "VK_EXT_texel_buffer_alignment","VK_EXT_texture_compression_astc_hdr","VK_EXT_tooling_info",
-    "VK_EXT_transform_feedback","VK_EXT_vertex_attribute_divisor","VK_EXT_vertex_input_dynamic_state",
-    "VK_EXT_ycbcr_2plane_444_formats","VK_EXT_ycbcr_image_arrays",
-    "VK_EXT_attachment_feedback_loop_layout","VK_EXT_attachment_feedback_loop_dynamic_state",
-    "VK_EXT_border_color_swizzle","VK_EXT_color_write_enable","VK_EXT_conditional_rendering",
-    "VK_EXT_conservative_rasterization","VK_EXT_custom_border_color","VK_EXT_depth_bias_control",
-    "VK_EXT_depth_clamp_control","VK_EXT_depth_clamp_zero_one","VK_EXT_depth_clip_control",
-    "VK_EXT_depth_clip_enable","VK_EXT_depth_range_unrestricted",
-    "VK_EXT_device_address_binding_report","VK_EXT_device_fault","VK_EXT_device_memory_report",
-    "VK_EXT_discard_rectangles","VK_EXT_display_control","VK_EXT_dynamic_rendering_unused_attachments",
-    "VK_EXT_extended_dynamic_state","VK_EXT_extended_dynamic_state2","VK_EXT_extended_dynamic_state3",
-    "VK_EXT_external_memory_dma_buf","VK_EXT_global_priority","VK_EXT_global_priority_query",
-    "VK_EXT_graphics_pipeline_library","VK_EXT_host_image_copy","VK_EXT_host_query_reset",
-    "VK_EXT_index_type_uint8","VK_EXT_inline_uniform_block","VK_EXT_legacy_dithering",
-    "VK_EXT_legacy_vertex_attributes","VK_EXT_line_rasterization","VK_EXT_load_store_op_none",
-    "VK_EXT_map_memory_placed","VK_EXT_nested_command_buffer",
-    "VK_AMD_buffer_marker","VK_AMD_device_coherent_memory","VK_AMD_memory_overallocation_behavior",
-    "VK_AMD_shader_core_properties","VK_AMD_shader_core_properties2","VK_AMD_shader_info",
-    "VK_QCOM_filter_cubic_clamp","VK_QCOM_filter_cubic_weights","VK_QCOM_image_processing",
-    "VK_QCOM_image_processing2","VK_QCOM_multiview_per_view_render_areas",
-    "VK_QCOM_multiview_per_view_viewports","VK_QCOM_render_pass_shader_resolve",
-    "VK_QCOM_render_pass_store_ops","VK_QCOM_render_pass_transform","VK_QCOM_tile_properties",
-    "VK_QCOM_ycbcr_degamma","VK_VALVE_descriptor_set_host_mapping","VK_VALVE_mutable_descriptor_type",
-    "VK_NV_compute_shader_derivatives","VK_NV_cooperative_matrix",
-    "VK_NV_device_diagnostic_checkpoints","VK_NV_device_diagnostics_config",
-    "VK_NVX_image_view_handle","VK_GOOGLE_decorate_string","VK_GOOGLE_display_timing",
-    "VK_GOOGLE_hlsl_functionality1","VK_GOOGLE_user_type",
-    "VK_IMG_filter_cubic","VK_IMG_relaxed_line_rasterization",
-    "VK_INTEL_performance_query","VK_INTEL_shader_integer_functions2",
-    "VK_MESA_image_alignment_control",
-]
+NEVER_UNLOCK = {
+    "VK_KHR_workgroup_memory_explicit_layout",
+    "VK_KHR_portability_subset",
+    "VK_EXT_validation_cache",
+    "VK_EXT_validation_features",
+    "VK_EXT_validation_flags",
+    "VK_ANDROID_native_buffer",
+    "VK_KHR_display",
+    "VK_KHR_display_swapchain",
+    "VK_EXT_direct_mode_display",
+    "VK_EXT_acquire_drm_display",
+    "VK_EXT_acquire_xlib_display",
+}
 
+all_exts = re.findall(r'Extension\s*\(\s*"(VK_[A-Z0-9_]+)"\s*,\s*(?:False|None)\s*,', c)
 flipped = 0
-for ext in SAFE_UNLOCK:
+for ext in all_exts:
+    if ext in NEVER_UNLOCK:
+        continue
     for pat in [
         rf'(Extension\s*\(\s*"{re.escape(ext)}"\s*,\s*)False(\s*,)',
         rf'(Extension\s*\(\s*"{re.escape(ext)}"\s*,\s*)None(\s*,)',
@@ -990,7 +943,21 @@ else:
 PYEOF
         log_success "compute_constlen_quirk added"
     elif [[ -f "$dev_info_h" ]] && ! grep -q "compute_constlen_quirk" "$dev_info_h"; then
-        log_warn "compute_constlen_quirk not in freedreno_dev_info.h — skipping (Mesa too old)"
+        python3 - "$dev_info_h" << 'INNEREOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+anchor = re.search(r'(bool\s+fs_must_have_non_zero_constlen_quirk\s*;)', c)
+if not anchor:
+    anchor = re.search(r'(bool\s+reading_shading_rate_requires_smask_quirk\s*;)', c)
+if anchor:
+    eol = c.find('\n', anchor.end())
+    c = c[:eol+1] + "      bool compute_constlen_quirk; /* injected */\n" + c[eol+1:]
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] compute_constlen_quirk injected into freedreno_dev_info.h')
+else:
+    print('[WARN] anchor field not found for compute_constlen_quirk')
+INNEREOF
     fi
 
     log_success "a7xx series compat done"
@@ -1001,10 +968,26 @@ apply_sysmem_mode_fix() {
     local cmd_buffer="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
     local dev_info_h="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"
     [[ ! -f "$cmd_buffer" ]] && { log_warn "tu_cmd_buffer.cc not found"; return 0; }
-    if [[ ! -f "$dev_info_h" ]] || ! grep -q "disable_gmem" "$dev_info_h"; then
-        log_warn "disable_gmem not in freedreno_dev_info.h — skipping sysmem fix"
-        return 0
+    if [[ -f "$dev_info_h" ]] && ! grep -q "disable_gmem" "$dev_info_h"; then
+        python3 - "$dev_info_h" << 'INNEREOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+anchor = re.search(r'(bool\s+has_ray_intersection\s*;)', c)
+if not anchor:
+    anchor = re.search(r'(bool\s+has_sw_fuse\s*;)', c)
+if not anchor:
+    anchor = re.search(r'(bool\s+fs_must_have_non_zero_constlen_quirk\s*;)', c)
+if anchor:
+    eol = c.find('\n', anchor.end())
+    c = c[:eol+1] + "      bool disable_gmem; /* injected */\n" + c[eol+1:]
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] disable_gmem injected into freedreno_dev_info.h')
+else:
+    print('[WARN] anchor field not found in freedreno_dev_info.h')
+INNEREOF
     fi
+    [[ ! -f "$dev_info_h" ]] && { log_warn "freedreno_dev_info.h not found"; return 0; }
     python3 - "$cmd_buffer" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
@@ -1089,6 +1072,25 @@ PYEOF
     fi
 
     local ir3_compiler_h="${MESA_DIR}/src/freedreno/ir3/ir3_compiler.h"
+    if [[ -f "$ir3_compiler_h" ]] && ! grep -q "cs_wave64" "$ir3_compiler_h"; then
+        python3 - "$ir3_compiler_h" << 'INNEREOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+anchor = re.search(r'(bool\s+has_branch_and_or\s*;)', c)
+if not anchor:
+    anchor = re.search(r'(bool\s+bitops_can_write_predicates\s*;)', c)
+if not anchor:
+    anchor = re.search(r'(unsigned\s+num_predicates\s*;)', c)
+if anchor:
+    eol = c.find('\n', anchor.end())
+    c = c[:eol+1] + "   bool cs_wave64; /* injected */\n" + c[eol+1:]
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] cs_wave64 injected into ir3_compiler.h')
+else:
+    print('[WARN] anchor field not found in ir3_compiler.h')
+INNEREOF
+    fi
     if [[ -f "$ir3_compiler" ]] && [[ -f "$ir3_compiler_h" ]] \
         && grep -q "cs_wave64" "$ir3_compiler_h" \
         && ! grep -q "A7XX_CS_WAVE64" "$ir3_compiler"; then
@@ -1135,6 +1137,318 @@ PYEOF
 }
 
 
+
+apply_vulkan14_promotion() {
+    log_info "Promoting Vulkan API to 1.4 + maintenance5/6 features"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    local tu_physical="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found"; return 0; }
+    if grep -q "VK14_PROMOTION_APPLIED" "$tu_device_cc"; then
+        log_info "Vulkan 1.4 promotion already applied"
+        return 0
+    fi
+    python3 - "$tu_device_cc" << 'INNEREOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+
+# Force VK_API_VERSION_1_4 in apiVersion
+n_api = 0
+for pat in [
+    r'(\.apiVersion\s*=\s*)VK_MAKE_API_VERSION\([^)]+\)',
+    r'(apiVersion\s*=\s*)VK_MAKE_API_VERSION\([^)]+\)',
+    r'(props->apiVersion\s*=\s*)VK_MAKE_API_VERSION\([^)]+\)',
+]:
+    c, k = re.subn(pat, r'\1VK_MAKE_API_VERSION(0, 1, 4, 344) /* VK14_PROMOTION_APPLIED */', c)
+    n_api += k
+
+# Enable KHR_maintenance5
+for pat in [
+    r'(\.KHR_maintenance5\s*=\s*)false',
+    r'(\.KHR_maintenance5\s*=\s*)None',
+]:
+    c = re.sub(pat, r'\1true', c)
+
+# Enable KHR_maintenance6
+for pat in [
+    r'(\.KHR_maintenance6\s*=\s*)false',
+    r'(\.KHR_maintenance6\s*=\s*)None',
+]:
+    c = re.sub(pat, r'\1true', c)
+
+# Force Vulkan13Features that a750 supports but may not advertise
+FORCE_TRUE_13 = [
+    'dynamicRendering',
+    'synchronization2',
+    'maintenance4',
+    'shaderIntegerDotProduct',
+    'pipelineCreationCacheControl',
+    'privateData',
+    'shaderDemoteToHelperInvocation',
+    'subgroupSizeControl',
+    'computeFullSubgroups',
+    'inlineUniformBlock',
+    'descriptorIndexing',
+    'shaderZeroInitializeWorkgroupMemory',
+]
+n_feat = 0
+for field in FORCE_TRUE_13:
+    pat = rf'(features->{re.escape(field)}\s*=\s*)false'
+    c, k = re.subn(pat, r'\1true', c)
+    n_feat += k
+
+# Force Vulkan14Features (maintenance5/6 core)
+FORCE_TRUE_14 = [
+    'maintenance5',
+    'maintenance6',
+    'pushDescriptor',
+    'dynamicRenderingLocalRead',
+    'shaderExpectAssume',
+    'shaderFloatControls2',
+    'globalPriorityQuery',
+]
+for field in FORCE_TRUE_14:
+    pat = rf'(features->{re.escape(field)}\s*=\s*)false'
+    c, k = re.subn(pat, r'\1true', c)
+    n_feat += k
+
+with open(fp, 'w') as f: f.write(c)
+print(f"[OK] apiVersion patched: {n_api} sites, features forced: {n_feat}")
+INNEREOF
+    log_success "Vulkan 1.4 promotion applied"
+}
+
+apply_subgroup_optimization() {
+    log_info "Fixing subgroup size for a7xx"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found"; return 0; }
+    if grep -q "A7XX_SUBGROUP_FIXED" "$tu_device_cc"; then
+        log_info "Subgroup fix already applied"
+        return 0
+    fi
+    python3 - "$tu_device_cc" << 'INNEREOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+
+# subgroupSize: a750 has 64-lane waves in most stages
+for pat in [
+    r'(subgroupSize\s*=\s*)\d+',
+    r'(props->subgroupSize\s*=\s*)\d+',
+]:
+    c, k = re.subn(pat, r'\g<1>64 /* A7XX_SUBGROUP_FIXED */', c, count=1)
+    n += k
+
+# minSubgroupSize / maxSubgroupSize
+for pat, val in [
+    (r'(minSubgroupSize\s*=\s*)\d+', '64'),
+    (r'(maxSubgroupSize\s*=\s*)\d+', '128'),
+]:
+    c, k = re.subn(pat, rf'\g<1>{val}', c, count=1)
+    n += k
+
+# supportedStages: all stages
+pat_stages = r'(subgroupSupportedStages\s*=\s*)[^;]+'
+c, k = re.subn(pat_stages,
+    r'\1VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_TASK_BIT_EXT',
+    c, count=1)
+n += k
+
+# supportedOperations: enable all
+pat_ops = r'(subgroupSupportedOperations\s*=\s*)[^;]+'
+c, k = re.subn(pat_ops,
+    r'\1VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_VOTE_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT | VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_SHUFFLE_BIT | VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT | VK_SUBGROUP_FEATURE_CLUSTERED_BIT | VK_SUBGROUP_FEATURE_QUAD_BIT | VK_SUBGROUP_FEATURE_ROTATE_BIT_KHR | VK_SUBGROUP_FEATURE_ROTATE_CLUSTERED_BIT_KHR',
+    c, count=1)
+n += k
+
+with open(fp, 'w') as f: f.write(c)
+print(f"[OK] Subgroup properties fixed ({n} replacements)")
+INNEREOF
+    log_success "Subgroup optimization applied"
+}
+
+apply_descriptor_buffer_features() {
+    log_info "Enabling descriptor buffer features"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found"; return 0; }
+    if grep -q "DESC_BUFFER_FEATURES_APPLIED" "$tu_device_cc"; then
+        log_info "Descriptor buffer features already applied"
+        return 0
+    fi
+    python3 - "$tu_device_cc" << 'INNEREOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+FIELDS = [
+    'descriptorBuffer',
+    'descriptorBufferCaptureReplay',
+    'descriptorBufferImageLayoutIgnored',
+    'descriptorBufferPushDescriptors',
+]
+for field in FIELDS:
+    pat = rf'(features->{re.escape(field)}\s*=\s*)false'
+    c, k = re.subn(pat, r'\1true /* DESC_BUFFER_FEATURES_APPLIED */', c, count=1)
+    n += k
+
+# descriptor buffer size limits - ensure reasonable values
+for pat, val in [
+    (r'(robustBufferAccessUpdateAfterBind\s*=\s*)false', 'true'),
+    (r'(shaderInputAttachmentArrayDynamicIndexing\s*=\s*)false', 'true'),
+    (r'(shaderUniformTexelBufferArrayDynamicIndexing\s*=\s*)false', 'true'),
+    (r'(shaderStorageTexelBufferArrayDynamicIndexing\s*=\s*)false', 'true'),
+]:
+    c, k = re.subn(pat, rf'\1{val}', c, count=1)
+    n += k
+
+with open(fp, 'w') as f: f.write(c)
+print(f"[OK] Descriptor buffer features enabled ({n} fields)")
+INNEREOF
+    log_success "Descriptor buffer features applied"
+}
+
+apply_memory_perf_patches() {
+    log_info "Applying memory performance patches"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found"; return 0; }
+    if grep -q "MEM_PERF_APPLIED" "$tu_device_cc"; then
+        log_info "Memory perf patches already applied"
+        return 0
+    fi
+    python3 - "$tu_device_cc" << 'INNEREOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+
+# maxPushConstantsSize: vkd3d-proton needs 256 for D3D12 root constants
+for pat in [
+    r'(maxPushConstantsSize\s*=\s*)\d+',
+    r'(props->maxPushConstantsSize\s*=\s*)\d+',
+]:
+    c, k = re.subn(pat, r'\g<1>256 /* MEM_PERF_APPLIED */', c, count=1)
+    n += k
+
+# maxBoundDescriptorSets: D3D12 needs at least 8
+pat_sets = r'(maxBoundDescriptorSets\s*=\s*)([1-7])\b'
+c, k = re.subn(pat_sets, r'\g<1>8', c)
+n += k
+
+# maxDescriptorSetSamplers: increase for complex games
+pat_samp = r'(maxDescriptorSetSamplers\s*=\s*)(\d+)'
+def boost_samplers(m):
+    val = int(m.group(2))
+    return m.group(1) + str(max(val, 4000))
+c, k = re.subn(pat_samp, boost_samplers, c)
+n += k
+
+# timestampPeriod: fix for accurate frame timing on a750
+# a750 GPU timer runs at ~19.2MHz RBBM
+for pat in [
+    r'(timestampPeriod\s*=\s*)[0-9.f]+',
+    r'(props->timestampPeriod\s*=\s*)[0-9.f]+',
+]:
+    c, k = re.subn(pat, r'\g<1>52.083f', c, count=1)
+    n += k
+
+with open(fp, 'w') as f: f.write(c)
+print(f"[OK] Memory/limits perf patches applied ({n} fields)")
+INNEREOF
+    log_success "Memory performance patches applied"
+}
+
+apply_renderpass_opt() {
+    log_info "Applying render pass optimization patches"
+    local tu_pass="${MESA_DIR}/src/freedreno/vulkan/tu_pass.cc"
+    [[ ! -f "$tu_pass" ]] && tu_pass="${MESA_DIR}/src/freedreno/vulkan/tu_pass.c"
+    [[ ! -f "$tu_pass" ]] && { log_warn "tu_pass not found, skipping"; return 0; }
+    if grep -q "RENDERPASS_OPT_APPLIED" "$tu_pass"; then
+        log_info "Renderpass opt already applied"
+        return 0
+    fi
+    python3 - "$tu_pass" << 'INNEREOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+
+# Force DONT_CARE for depth/stencil store when not read back
+# Pattern: depth attachment store op assigned to STORE
+pat = r'(storeOp\s*=\s*)VK_ATTACHMENT_STORE_OP_STORE(\s*;[^\n]*depth)'
+c, k = re.subn(pat, r'\1VK_ATTACHMENT_STORE_OP_DONT_CARE /* RENDERPASS_OPT_APPLIED */ \2', c)
+n += k
+
+# Allow lazy allocation flag on transient attachments
+pat2 = r'(transientAttachment\s*&&[^{]*\{)'
+m = re.search(pat2, c, re.DOTALL)
+if m:
+    ins = c.find('{', m.start()) + 1
+    eol = c.find('\n', ins)
+    inject = "\n      /* RENDERPASS_OPT_APPLIED: prefer lazily allocated */\n"
+    c = c[:eol+1] + inject + c[eol+1:]
+    n += 1
+
+with open(fp, 'w') as f: f.write(c)
+print(f"[OK] Renderpass optimizations applied ({n} changes)")
+INNEREOF
+    log_success "Renderpass optimization applied"
+}
+
+apply_shader_perf_patches() {
+    log_info "Applying shader performance patches"
+    local ir3_nir="${MESA_DIR}/src/freedreno/ir3/ir3_nir.c"
+    local ir3_compiler="${MESA_DIR}/src/freedreno/ir3/ir3_compiler.c"
+    [[ ! -f "$ir3_nir" ]] && { log_warn "ir3_nir.c not found"; return 0; }
+    if grep -q "SHADER_PERF_APPLIED" "$ir3_nir"; then
+        log_info "Shader perf patches already applied"
+        return 0
+    fi
+    python3 - "$ir3_nir" "$ir3_compiler" << 'INNEREOF'
+import sys, re
+fp_nir = sys.argv[1]
+fp_comp = sys.argv[2]
+n = 0
+
+with open(fp_nir) as f: c = f.read()
+
+# Increase NIR loop unroll threshold for a7xx
+# Default is usually 32 or 64 iterations
+pat = r'(nir_opt_loop_unroll[^;]*max_unroll_iterations\s*=\s*)(\d+)'
+m = re.search(pat, c)
+if m:
+    old_val = int(m.group(2))
+    if old_val < 128:
+        c = re.sub(pat, lambda x: x.group(1) + '128', c, count=1)
+        n += 1
+
+# Enable aggressive instruction combining for ir3
+pat2 = r'(nir_opt_algebraic_before_ffma[^;]*;)'
+if re.search(pat2, c):
+    m2 = re.search(pat2, c)
+    eol = c.find('\n', m2.end())
+    c = c[:eol+1] + "   /* SHADER_PERF_APPLIED */\n" + c[eol+1:]
+    n += 1
+
+with open(fp_nir, 'w') as f: f.write(c)
+
+if fp_comp and __import__('os').path.exists(fp_comp):
+    with open(fp_comp) as f: c2 = f.read()
+    # Increase max_const for compute shaders on a7xx
+    pat3 = r'(compiler->max_const_compute\s*=\s*)(\d+)'
+    m3 = re.search(pat3, c2)
+    if m3:
+        old_val = int(m3.group(2))
+        if old_val < 512:
+            c2 = re.sub(pat3, lambda x: x.group(1) + '512', c2, count=1)
+            n += 1
+    with open(fp_comp, 'w') as f: f.write(c2)
+
+print(f"[OK] Shader performance patches applied ({n} changes)")
+INNEREOF
+    log_success "Shader performance patches applied"
+}
+
 apply_patch_series() {
     local series_dir="$1"
     log_info "Applying patch series from: $series_dir"
@@ -1174,6 +1488,12 @@ apply_patches() {
     apply_sysmem_mode_fix
     if [[ "$ENABLE_A7XX_COMPAT" == "true" ]]; then apply_a7xx_series_compat; fi
     if [[ "$ENABLE_A7XX_PERF" == "true" ]]; then apply_a7xx_perf_patches; fi
+    if [[ "$ENABLE_VK14_PROMO" == "true" ]]; then apply_vulkan14_promotion; fi
+    if [[ "$ENABLE_VK14_PROMO" == "true" ]]; then apply_subgroup_optimization; fi
+    if [[ "$ENABLE_VK14_PROMO" == "true" ]]; then apply_descriptor_buffer_features; fi
+    apply_memory_perf_patches
+    apply_renderpass_opt
+    if [[ "$ENABLE_SHADER_PERF" == "true" ]]; then apply_shader_perf_patches; fi
     if [[ "$ENABLE_CUSTOM_FLAGS" == "true" ]]; then apply_custom_debug_flags; fi
     if [[ "$ENABLE_DECK_EMU" == "true" ]]; then apply_deck_emu_support; fi
     if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then apply_vulkan_extensions_support; fi
