@@ -237,7 +237,7 @@ jobs:
         ${{ inputs.enable_perf == true
             && '-Wl,--gc-sections -Wl,--icf=safe'
             || '-Wl,--gc-sections' }}
-      BUILD_SCRIPT: "build_turnip.sh"
+      BUILD_SCRIPT: "scripts/build_turnip.sh"
 
     steps:
       - name: Checkout repository
@@ -298,7 +298,9 @@ jobs:
             meson-wraps-
 
       - name: Prepare build script
-        run: chmod +x "${{ env.BUILD_SCRIPT }}"
+        run: |
+          chmod +x "${{ env.BUILD_SCRIPT }}"
+          chmod +x vk_extensions_patch.py 2>/dev/null || true
 
       - name: Build Turnip Driver
         id: build
