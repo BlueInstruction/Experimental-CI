@@ -1,5 +1,4 @@
-import sys, re
-import os
+import sys, re, os
 
 def patch_vk_extensions(vk_ext_py_path):
     if not os.path.exists(vk_ext_py_path):
@@ -32,7 +31,7 @@ def patch_vk_extensions(vk_ext_py_path):
         "VK_QCOM_tile_memory_heap",
         "VK_QCOM_tile_shading",
     ]
-    
+
     added = []
     for ext in MISSING:
         if ext in c:
@@ -44,18 +43,18 @@ def patch_vk_extensions(vk_ext_py_path):
             m = re.search(r"(extensions\s*=\s*\[)", c)
         if m:
             ins = c.find("\n", m.end())
-            entry = f'\n    Extension("{ext}", "DEVICE"),'
+            entry = '\n    Extension("' + ext + '", "DEVICE"),'
             c = c[:ins] + entry + c[ins:]
             added.append(ext)
         else:
-            c += f'\n# auto-added: {ext}\n'
+            c += "\n# auto-added: " + ext + "\n"
             added.append(ext)
-    
-    c += "\n# VK_MESA_EXT_TABLE_PATCHED\
+
+    c += "\n# VK_MESA_EXT_TABLE_PATCHED\n"
 
     with open(vk_ext_py_path, "w") as f:
         f.write(c)
-    print(f"[OK] vk_extensions.py: added {len(added)} entries")
+    print(f"[OK] vk_extensions.py: added {len(added)} entries: {added}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
