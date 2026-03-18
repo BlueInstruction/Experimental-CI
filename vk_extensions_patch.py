@@ -12,20 +12,32 @@ def patch_vk_extensions(vk_ext_py_path):
         print("[OK] vk_extensions.py already patched")
         return
 
-    # Detect ext_version type from __init__:
-    # self.ext_version = int(ext_version)  -> needs integer
-    # self.ext_version = ext_version       -> needs bool/None
-    needs_int = bool(re.search(r'self\.ext_version\s*=\s*int\(', c))
+    # Fix __init__ to handle None ext_version:
+    # self.ext_version = int(ext_version)  ->  self.ext_version = int(ext_version) if ext_version is not None else 0
+    if "self.ext_version = int(ext_version)" in c:
+        c = c.replace(
+            "self.ext_version = int(ext_version)",
+            "self.ext_version = int(ext_version) if ext_version is not None else 0"
+        )
+        print("[OK] Fixed ext_version None handling in __init__")
 
-    # Find the version used in existing Extension() calls
-    # e.g. Extension("VK_FOO", 1, None) or Extension("VK_FOO", True, None)
+    # Also fix get_all_exts_from_xml if it passes None directly from XML
+    # Pattern: Extension(name, version, ...) where version could be None
+    if "ext_version" in c and "get_all_exts_from_xml" in c:
+        c = re.sub(
+            r'(Extension\s*\([^,]+,\s*)(ext_version)(\s*[,)])',
+            r'\1(int(\2) if \2 is not None else 0)\3',
+            c
+        )
+
+    # Detect signature for new entries
+    needs_int = bool(re.search(r'self\.ext_version\s*=\s*int\(', c))
     existing_m = re.search(
-        r'Extension\s*\(\s*"VK_\w+"\s*,\s*(\d+|True|False|None)\s*(?:,\s*([^)]+))?\s*\)',
+        r'Extension\s*\(\s*"VK_\w+"\s*,\s*(\d+|True|False)\s*(?:,\s*([^)]+))?\s*\)',
         c
     )
 
     if needs_int:
-        # Must pass integer version — use 1 as safe default
         if existing_m:
             ver = existing_m.group(1)
             try:
