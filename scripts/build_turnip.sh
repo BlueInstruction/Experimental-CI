@@ -613,14 +613,15 @@ else:
     with open(fp, 'w') as f: f.write(c)
     print(f'[OK] EXT fallback: flipped {n} bits')
 INNEREOF
-    # Force-inject specific extensions directly into vkEnumerateDeviceExtensionProperties
-    if ! grep -q "FORCE_EXT_LIST_APPLIED" "$tu_device_cc"; then
-        python3 - "$tu_device_cc" << 'FORCEEOF'
+    # Patch vk_physical_device.c to append forced extensions to enumeration output
+    local vk_phys_c="${MESA_DIR}/src/vulkan/runtime/vk_physical_device.c"
+    if [[ -f "$vk_phys_c" ]] && ! grep -q "FORCE_EXT_APPENDED" "$vk_phys_c"; then
+        python3 - "$vk_phys_c" << 'FORCEEOF'
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 
-FORCE_EXT_NAMES = [
+FORCE_EXTS = [
     "VK_KHR_unified_image_layouts",
     "VK_KHR_cooperative_matrix",
     "VK_KHR_shader_bfloat16",
@@ -632,44 +633,78 @@ FORCE_EXT_NAMES = [
     "VK_KHR_device_address_commands",
 ]
 
-ext_entries = "\n".join(f'   {{ "{e}", 1 }},' for e in FORCE_EXT_NAMES)
-force_code = f"""
-/* FORCE_EXT_LIST_APPLIED */
-static const struct {{ const char *name; uint32_t specVersion; }} _force_exts[] = {{
-{ext_entries}
+inject_data = "\n".join(
+    f'   {{ "{e}", 1 }},' for e in FORCE_EXTS
+)
+
+inject_struct = f"""
+/* FORCE_EXT_APPENDED */
+static const struct {{ const char *name; uint32_t ver; }} _appended_exts[] = {{
+{inject_data}
 }};
-static const uint32_t _force_ext_count = {len(FORCE_EXT_NAMES)};
+#define _APPENDED_EXT_COUNT {len(FORCE_EXTS)}
 """
 
-force_fn = """
-VKAPI_ATTR VkResult VKAPI_CALL
-tu_EnumerateDeviceExtensionProperties_forced(
-   VkPhysicalDevice physicalDevice,
-   const char *pLayerName,
-   uint32_t *pPropertyCount,
-   VkExtensionProperties *pProperties)
-{
-   TU_FROM_HANDLE(tu_physical_device, pdevice, physicalDevice);
-   (void)pLayerName;
-   VkResult result = tu_GetDeviceExtensions_base(
-      physicalDevice, pLayerName, pPropertyCount, pProperties);
-   if (!pProperties) {
-      *pPropertyCount += _force_ext_count;
-      return result;
+# Find vk_physical_device_enumerate_extensions or similar enumerate function
+# and add our extensions to its return
+pat = re.compile(
+    r'(vkEnumerateDeviceExtensionProperties[^(]*\([^)]*\)\s*\{)',
+    re.DOTALL
+)
+m = pat.search(c)
+if not m:
+    pat = re.compile(
+        r'(vk_physical_device_enumerate_extensions_2[^(]*\([^)]*\)\s*\{)',
+        re.DOTALL
+    )
+    m = pat.search(c)
+
+if m:
+    # Find the closing brace of this function
+    depth = 0
+    start = c.find("{", m.start())
+    i = start
+    while i < len(c):
+        if c[i] == "{": depth += 1
+        elif c[i] == "}":
+            depth -= 1
+            if depth == 0:
+                # Inject before the final return/closing
+                append_code = """
+   /* FORCE_EXT_APPENDED: append forced extensions */
+   for (uint32_t _fi = 0; _fi < _APPENDED_EXT_COUNT; _fi++) {
+      bool _found = false;
+      if (*pPropertyCount > 0 && pProperties) {
+         for (uint32_t _fj = 0; _fj < *pPropertyCount; _fj++) {
+            if (strcmp(pProperties[_fj].extensionName, _appended_exts[_fi].name) == 0) {
+               _found = true; break;
+            }
+         }
+      }
+      if (!_found) {
+         if (pProperties) {
+            strncpy(pProperties[*pPropertyCount].extensionName,
+                    _appended_exts[_fi].name, VK_MAX_EXTENSION_NAME_SIZE - 1);
+            pProperties[*pPropertyCount].specVersion = _appended_exts[_fi].ver;
+         }
+         (*pPropertyCount)++;
+      }
    }
-   return result;
-}
 """
+                c = c[:i] + append_code + c[i:]
+                break
+        i += 1
 
-# Find first #include and inject after it
-inc = c.find("#include")
-if inc != -1:
-    eol = c.find("\n", inc)
-    c = c[:eol+1] + force_code + c[eol+1:]
+    first_inc = c.find("#include")
+    if first_inc != -1:
+        eol = c.find("\n", first_inc)
+        c = c[:eol+1] + inject_struct + c[eol+1:]
+
     with open(fp, "w") as f: f.write(c)
-    print(f"[OK] Force ext list injected ({len(FORCE_EXT_NAMES)} extensions)")
+    print(f"[OK] Force ext appended to enumerate function ({len(FORCE_EXTS)} extensions)")
 else:
-    print("[WARN] No #include found in tu_device.cc")
+    # Fallback: inject into tu_device.cc
+    print("[WARN] enumerate function not found in vk_physical_device.c")
 FORCEEOF
     fi
 
@@ -908,7 +943,35 @@ apply_deck_emu_support() {
 import sys, re
 fp, vendor_id, device_id, driver_version, device_name = sys.argv[1:6]
 with open(fp) as f: c = f.read()
+
+turbo_init = """
+/* DECK_EMU_PERF_INIT */
+static void
+tu_deck_perf_init(void)
+{
+   static const char * const pwrlevel_paths[] = {
+      "/sys/class/kgsl/kgsl-3d0/min_pwrlevel",
+      "/sys/class/devfreq/kgsl-3d0/min_freq",
+      NULL,
+   };
+   static const char * const governor_paths[] = {
+      "/sys/class/kgsl/kgsl-3d0/devfreq/governor",
+      "/sys/class/devfreq/kgsl-3d0/governor",
+      NULL,
+   };
+   for (int i = 0; pwrlevel_paths[i]; i++) {
+      int fd = open(pwrlevel_paths[i], O_WRONLY | O_CLOEXEC);
+      if (fd >= 0) { (void)write(fd, "0", 1); close(fd); break; }
+   }
+   for (int i = 0; governor_paths[i]; i++) {
+      int fd = open(governor_paths[i], O_WRONLY | O_CLOEXEC);
+      if (fd >= 0) { (void)write(fd, "performance", 11); close(fd); break; }
+   }
+}
+"""
+
 spoof_code = f"""
+   /* DECK_EMU */
    if (getenv("TU_DECK_EMU")) {{
       props->vendorID      = {vendor_id};
       props->deviceID      = {device_id};
@@ -916,15 +979,34 @@ spoof_code = f"""
       snprintf(props->deviceName, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE, "{device_name}");
    }}
 """
+
+perf_call = """
+   /* DECK_EMU_PERF */
+   tu_deck_perf_init();
+"""
+
 m = re.search(r'(tu_GetPhysicalDeviceProperties2?\s*\([^{]*\{)', c)
 if not m:
     m = re.search(r'(vkGetPhysicalDeviceProperties2?\s*\([^{]*\{)', c)
 if m:
     c = c[:m.end()] + spoof_code + c[m.end():]
-    with open(fp, 'w') as f: f.write(c)
     print(f'[OK] Deck emu ({device_name}) applied')
 else:
     print('[WARN] Properties function not found for deck emu')
+
+if 'DECK_EMU_PERF_INIT' not in c:
+    inc = c.find('#include')
+    if inc != -1:
+        eol = c.find('\n', inc)
+        c = c[:eol+1] + turbo_init + c[eol+1:]
+    init_m = re.search(r'(tu_physical_device_init\s*\([^)]*\)\s*\{)', c)
+    if not init_m:
+        init_m = re.search(r'(tu_CreateDevice\s*\([^)]*\)\s*\{)', c)
+    if init_m:
+        ins = c.find('\n', c.find('{', init_m.start())) + 1
+        c = c[:ins] + perf_call + c[ins:]
+        print('[OK] Deck perf init injected into device creation')
+with open(fp, 'w') as f: f.write(c)
 PYEOF
     log_success "Deck emulation applied ($DECK_EMU_TARGET)"
 }
@@ -1252,6 +1334,59 @@ with open(fp, 'w') as f: f.write(c)
 print("[OK] unconditional sysmem -> conditional disable_gmem check")
 PYEOF
     log_success "sysmem mode gating fixed"
+}
+
+
+apply_a7xx_visibility_fix() {
+    log_info "Applying a7xx visibility fixes (LRZ + occlusion)"
+    local tu_lrz="${MESA_DIR}/src/freedreno/vulkan/tu_lrz.cc"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+
+    if [[ -f "$tu_lrz" ]] && ! grep -q "A7XX_LRZ_SAFE" "$tu_lrz"; then
+        python3 - "$tu_lrz" << 'INNEREOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+
+pat1 = re.compile(r"(lrz\.fast_clear\s*=\s*)true\s*;")
+c, k = re.subn(pat1, r"\g<1>false /* A7XX_LRZ_SAFE */;", c)
+n += k
+
+pat2 = re.compile(r"(lrz_valid\s*=\s*)(true)(\s*;)")
+c, k2 = re.subn(pat2, r"\g<1>false /* A7XX_LRZ_SAFE */\3", c, count=2)
+n += k2
+
+with open(fp, "w") as f: f.write(c)
+print(f"[OK] LRZ visibility fix: {n} changes")
+INNEREOF
+        log_success "LRZ visibility fix applied"
+    fi
+
+    if [[ -f "$tu_device_cc" ]] && ! grep -q "A7XX_OCCLUSION_FIX" "$tu_device_cc"; then
+        python3 - "$tu_device_cc" << 'INNEREOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+
+for pat, label in [
+    (r"(occlusionQueryPrecise\s*=\s*)(false|VK_FALSE)", "occlusionQueryPrecise"),
+    (r"(pipelineStatisticsQuery\s*=\s*)(false|VK_FALSE)", "pipelineStatisticsQuery"),
+    (r"(independentBlend\s*=\s*)(false|VK_FALSE)", "independentBlend"),
+    (r"(depthClamp\s*=\s*)(false|VK_FALSE)", "depthClamp"),
+    (r"(depthBiasClamp\s*=\s*)(false|VK_FALSE)", "depthBiasClamp"),
+]:
+    c, k = re.subn(re.compile(pat), r"\g<1>true /* A7XX_OCCLUSION_FIX */", c)
+    if k: n += k
+
+with open(fp, "w") as f: f.write(c)
+print(f"[OK] Occlusion/visibility feature fixes: {n} fields")
+INNEREOF
+        log_success "Occlusion query fix applied"
+    fi
+
+    log_success "a7xx visibility fixes done"
 }
 
 apply_a7xx_perf_patches() {
@@ -1757,6 +1892,7 @@ apply_patches() {
     apply_a8xx_patches
     apply_sysmem_mode_fix
     if [[ "$ENABLE_A7XX_COMPAT" == "true" ]]; then apply_a7xx_series_compat; fi
+    if [[ "$ENABLE_A7XX_COMPAT" == "true" ]]; then apply_a7xx_visibility_fix; fi
     if [[ "$ENABLE_A7XX_PERF" == "true" ]]; then apply_a7xx_perf_patches; fi
     if [[ "$ENABLE_VK14_PROMO" == "true" ]]; then apply_vulkan14_promotion; fi
     if [[ "$ENABLE_VK14_PROMO" == "true" ]]; then apply_subgroup_optimization; fi
