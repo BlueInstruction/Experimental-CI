@@ -945,6 +945,8 @@ fp, vendor_id, device_id, driver_version, device_name = sys.argv[1:6]
 with open(fp) as f: c = f.read()
 
 turbo_init = """
+#include <fcntl.h>
+#include <unistd.h>
 /* DECK_EMU_PERF_INIT */
 static void
 tu_deck_perf_init(void)
