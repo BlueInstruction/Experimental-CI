@@ -254,7 +254,7 @@ jobs:
           mkdir -p pkg/system32 pkg/syswow64
           cp "${{ env.SRC_PATH }}/x64/"*.dll pkg/system32/
           cp "${{ env.SRC_PATH }}/x86/"*.dll pkg/syswow64/
-          cat > pkg/profile.json << JSONEOF
+          cat > pkg/profile.json << 'JSONEOF'
           {
             "type": "VKD3D",
             "versionName": "${{ env.VER }}",
