@@ -141,7 +141,7 @@ on:
       custom_tu_debug:
         description: "Custom TU_DEBUG flags (comma-separated)"
         required: false
-        default: "perf,noconform,fdm,log_skip_gmem_ops"
+        default: "noconform,fdm,log_skip_gmem_ops"
 
       build_number:
         description: "Build number (e.g. 1 -> Turnip-26.1.0-B1)"
