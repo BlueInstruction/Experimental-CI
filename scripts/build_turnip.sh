@@ -686,8 +686,7 @@ FORCE_EXTS = [
     "VK_KHR_device_address_commands",
 ]
 
-ext_entries = "
-".join(f'   {{"{e}", 1}},' for e in FORCE_EXTS)
+ext_entries = "\n".join(f'   {{"{e}", 1}},' for e in FORCE_EXTS)
 
 inject_struct = f"""
 /* FORCE_EXT_COUNT_PATCH */
