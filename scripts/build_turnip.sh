@@ -637,12 +637,8 @@ FORCE_FIELDS = [
     "KHR_device_address_commands",
 ]
 
-inject_lines = "
-".join(f"   ext->{f} = true;" for f in FORCE_FIELDS)
-inject = f"
-   /* FORCE_EXT_FIELDS_APPLIED */
-{inject_lines}
-"
+inject_lines = "\n".join(f"   ext->{f} = true;" for f in FORCE_FIELDS)
+inject = "\n   /* FORCE_EXT_FIELDS_APPLIED */\n" + inject_lines + "\n"
 
 # Find get_device_extensions closing brace
 m = re.search(r'(get_device_extensions\s*\([^)]*\)\s*\{)', c)
