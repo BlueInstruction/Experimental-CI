@@ -26,7 +26,10 @@ permissions:
 
 defaults:
   run:
-    shell: 'bash --noprofile --norc -Eeuo pipefail {0}'
+    shell: bash {0}
+
+env:
+  TOOLCHAIN_DIR: /opt/llvm-mingw
 
 jobs:
   build:
@@ -38,16 +41,23 @@ jobs:
 
       - name: Setup Dependencies
         run: |
-          sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y git ninja-build curl jq python3 glslang-tools spirv-tools zstd \
-            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 g++-mingw-w64-x86-64 g++-mingw-w64-i686 \
-            mingw-w64 mingw-w64-tools binutils-mingw-w64
-          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix 2>/dev/null || true
-          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix 2>/dev/null || true
-          sudo update-alternatives --set i686-w64-mingw32-gcc /usr/bin/i686-w64-mingw32-gcc-posix 2>/dev/null || true
-          sudo update-alternatives --set i686-w64-mingw32-g++ /usr/bin/i686-w64-mingw32-g++-posix 2>/dev/null || true
+          sudo apt-get install -y git ninja-build curl jq python3 glslang-tools spirv-tools zstd wget unzip
           sudo pip3 install --upgrade meson
+
+      - name: Setup LLVM MinGW Toolchain
+        run: |
+          LLVM_TAG="20251104"
+          wget -q "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_TAG}/llvm-mingw-${LLVM_TAG}-ucrt-ubuntu-22.04-x86_64.tar.xz" -O llvm.tar.xz
+          sudo mkdir -p $TOOLCHAIN_DIR
+          sudo tar -C $TOOLCHAIN_DIR --strip-components=1 -xJf llvm.tar.xz
+          echo "$TOOLCHAIN_DIR/bin" >> $GITHUB_PATH
+          rm llvm.tar.xz
+
+      - name: Verify Toolchain
+        run: |
+          x86_64-w64-mingw32-clang --version
+          i686-w64-mingw32-clang --version
 
       - name: Fetch Version
         run: |
@@ -82,7 +92,7 @@ jobs:
         run: |
           git clone --recurse-submodules --recursive --branch ${{ env.TAG }} --depth 1 \
             https://github.com/HansKristian-Work/vkd3d-proton.git src
-          cd src && chmod +x ./package-release.sh
+          cd src
           COMMIT=$(git rev-parse --short HEAD)
           echo "COMMIT=$COMMIT" >> $GITHUB_ENV
 
@@ -233,41 +243,92 @@ jobs:
           PYSCRIPT
           python3 patch.py
 
-      - name: Build
+      - name: Create Cross Files
         if: steps.check.outputs.SKIP == 'false'
         run: |
+          cat > crossfile-x64.txt << 'EOF'
+          [binaries]
+          ar = 'x86_64-w64-mingw32-ar'
+          c = 'x86_64-w64-mingw32-clang'
+          cpp = 'x86_64-w64-mingw32-clang++'
+          ld = 'x86_64-w64-mingw32-ld'
+          windres = 'x86_64-w64-mingw32-windres'
+          strip = 'x86_64-w64-mingw32-strip'
+          widl = 'x86_64-w64-mingw32-widl'
+          [host_machine]
+          system = 'windows'
+          cpu_family = 'x86_64'
+          cpu = 'x86_64'
+          endian = 'little'
+          EOF
+
+          cat > crossfile-x86.txt << 'EOF'
+          [binaries]
+          ar = 'i686-w64-mingw32-ar'
+          c = 'i686-w64-mingw32-clang'
+          cpp = 'i686-w64-mingw32-clang++'
+          ld = 'i686-w64-mingw32-ld'
+          windres = 'i686-w64-mingw32-windres'
+          strip = 'i686-w64-mingw32-strip'
+          widl = 'i686-w64-mingw32-widl'
+          [host_machine]
+          system = 'windows'
+          cpu_family = 'x86'
+          cpu = 'i686'
+          endian = 'little'
+          EOF
+
+      - name: Build x64 + x86
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
-          COMMON="-O3 -DNDEBUG -pipe"
-          ARCH="-march=x86-64-v3 -mtune=generic"
-          OPT="-fno-math-errno -fno-trapping-math -fno-stack-protector -fno-ident"
-          LD="-Wl,--gc-sections -Wl,--as-needed -s -flto=thin"
+          BUILD_FLAGS="-O3 -DNDEBUG"
+          [[ "${{ inputs.BUILD_TYPE }}" == "debug" ]] && BUILD_FLAGS="-O0 -g -DDEBUG"
 
-          export CFLAGS="$COMMON $ARCH $OPT"
-          export CXXFLAGS="$COMMON $ARCH $OPT"
-          export LDFLAGS="$LD"
-          export CFLAGS_x86="$COMMON -march=i686 -mtune=generic -msse2 -mfpmath=sse $OPT"
-          export CXXFLAGS_x86="$COMMON -march=i686 -mtune=generic -msse2 -mfpmath=sse $OPT"
-          export LDFLAGS_x86="-Wl,--gc-sections -s -flto=thin"
+          meson setup build-x64 \
+            --cross-file ../crossfile-x64.txt \
+            --buildtype release \
+            -Dc_args="$BUILD_FLAGS" \
+            -Dcpp_args="$BUILD_FLAGS"
+          ninja -C build-x64 -j$(nproc) 2>&1 | tee build-x64.log
+          if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+            tail -n 50 build-x64.log
+            exit 1
+          fi
 
-          bash ./package-release.sh ${{ env.TAG }} ../out --no-package 2>&1 | tee build.log
-          [[ ${PIPESTATUS[0]} -ne 0 ]] && { tail -n 50 build.log; exit 1; }
+          meson setup build-x86 \
+            --cross-file ../crossfile-x86.txt \
+            --buildtype release \
+            -Dc_args="$BUILD_FLAGS" \
+            -Dcpp_args="$BUILD_FLAGS"
+          ninja -C build-x86 -j$(nproc) 2>&1 | tee build-x86.log
+          if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+            tail -n 50 build-x86.log
+            exit 1
+          fi
+
+      - name: Verify Build
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          for arch in x64 x86; do
+            for dll in d3d12.dll d3d12core.dll; do
+              DLL=$(find src/build-${arch} -name "$dll" -type f | head -1)
+              [[ -z "$DLL" ]] && { echo "Missing: $arch/$dll"; exit 1; }
+              echo "$DLL: $(stat -c%s "$DLL") bytes"
+            done
+          done
 
       - name: Create Package
         if: steps.check.outputs.SKIP == 'false'
         run: |
-          SRC=$(find out -maxdepth 1 -type d -name "vkd3d-proton-*" | head -1)
-          [[ -z "$SRC" ]] && { echo "Build output not found"; ls out/; exit 1; }
-          for d in d3d12.dll d3d12core.dll; do
-            F=$(find "$SRC" -path "*/x64/$d" -type f | head -1)
-            [[ -z "$F" ]] && { echo "Missing x64/$d"; exit 1; }
-            echo "$F: $(stat -c%s "$F") bytes"
-          done
-
           mkdir -p pkg/system32 pkg/syswow64
-          for d in d3d12.dll d3d12core.dll; do
-            find "$SRC" -path "*/x64/$d" -exec cp {} pkg/system32/ \;
-            find "$SRC" \( -path "*/x86/$d" -o -path "*/x32/$d" \) -exec cp {} pkg/syswow64/ \;
+          for dll in d3d12.dll d3d12core.dll; do
+            SRC=$(find src/build-x64 -name "$dll" -type f | head -1)
+            [[ -n "$SRC" ]] && cp "$SRC" pkg/system32/
+            SRC=$(find src/build-x86 -name "$dll" -type f | head -1)
+            [[ -n "$SRC" ]] && cp "$SRC" pkg/syswow64/
           done
           llvm-strip --strip-all pkg/system32/*.dll pkg/syswow64/*.dll 2>/dev/null || true
 
