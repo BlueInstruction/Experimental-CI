@@ -118,7 +118,6 @@ on:
         description: "Enable custom TU_DEBUG flags"
         default: true
 
-
       enable_a7xx_compat:
         type: boolean
         description: "Apply a7xx compat patches (branch_and_or, workgroup_mem, constlen)"
@@ -138,6 +137,7 @@ on:
         type: boolean
         description: "Shader compiler perf (unroll, max_const, NIR opts)"
         default: true
+
       custom_tu_debug:
         description: "Custom TU_DEBUG flags (comma-separated)"
         required: false
@@ -218,10 +218,10 @@ jobs:
       ENABLE_DECK_EMU:      ${{ inputs.enable_deck_emu }}
       DECK_EMU_TARGET:      ${{ inputs.deck_emu_target }}
       ENABLE_PERF:          ${{ inputs.enable_perf }}
-      ENABLE_A7XX_COMPAT:  ${{ inputs.enable_a7xx_compat }}
-      ENABLE_A7XX_PERF:    ${{ inputs.enable_a7xx_perf }}
-      ENABLE_VK14_PROMO:   ${{ inputs.enable_vk14_promo }}
-      ENABLE_SHADER_PERF:  ${{ inputs.enable_shader_perf }}
+      ENABLE_A7XX_COMPAT:   ${{ inputs.enable_a7xx_compat }}
+      ENABLE_A7XX_PERF:     ${{ inputs.enable_a7xx_perf }}
+      ENABLE_VK14_PROMO:    ${{ inputs.enable_vk14_promo }}
+      ENABLE_SHADER_PERF:   ${{ inputs.enable_shader_perf }}
       ENABLE_CUSTOM_FLAGS:  ${{ inputs.enable_custom_flags }}
       CUSTOM_TU_DEBUG:      ${{ inputs.custom_tu_debug }}
       BUILD_NUMBER:         ${{ inputs.build_number }}
@@ -304,15 +304,18 @@ jobs:
 
       - name: Build Turnip Driver
         id: build
+        shell: bash {0}
         run: |
           start_time=$(date +%s)
-          if ! bash "${{ env.BUILD_SCRIPT }}"; then
-            echo "Build script exited with error"
-            exit 1
-          fi
+          bash "${{ env.BUILD_SCRIPT }}"
+          build_result=$?
           end_time=$(date +%s)
           duration=$((end_time - start_time))
           echo "Build completed in $((duration/60))m $((duration%60))s"
+          if [[ $build_result -ne 0 ]]; then
+            echo "Build script exited with error $build_result"
+            exit 1
+          fi
           if [[ -d "build" ]]; then
             zip_file=$(ls build/Turnip-*.zip 2>/dev/null | head -1)
             if [[ -n "$zip_file" ]]; then
