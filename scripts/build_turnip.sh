@@ -660,9 +660,7 @@ if m:
     print(f"[OK] Force ext fields injected: {n} extensions")
 else:
     # Already injected via EXT_INJECT_APPLIED
-    c += "
-/* FORCE_EXT_FIELDS_APPLIED */
-"
+    c += "\n/* FORCE_EXT_FIELDS_APPLIED */\n"
     with open(fp, "w") as f: f.write(c)
     print("[OK] Force ext marker added (EXT_INJECT already covers this)")
 FORCEEOF
@@ -747,9 +745,7 @@ if m:
 else:
     print("[WARN] vk_physical_device_enumerate_extensions_2 not found — skipping")
     # Still write marker
-    c += "
-/* FORCE_EXT_COUNT_PATCH */
-"
+    c += "\n/* FORCE_EXT_COUNT_PATCH */\n"
     with open(fp, "w") as f: f.write(c)
 FORCEEOF
     fi
