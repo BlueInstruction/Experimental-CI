@@ -29,6 +29,7 @@ MESA_MIRROR="https://github.com/mesa3d/mesa.git"
 ROBCLARK_REPO="https://gitlab.freedesktop.org/robclark/mesa.git"
 AUTOTUNER_REPO="https://gitlab.freedesktop.org/PixelyIon/mesa.git"
 VULKAN_HEADERS_REPO="https://github.com/KhronosGroup/Vulkan-Headers.git"
+VULKAN_HEADERS_TAG="${VULKAN_HEADERS_TAG:-v1.4.347}"
 
 MESA_SOURCE="${MESA_SOURCE:-main_branch}"
 STAGING_BRANCH="${STAGING_BRANCH:-staging/26.0}"
@@ -180,18 +181,71 @@ clone_mesa() {
 }
 
 update_vulkan_headers() {
-    log_info "Updating Vulkan headers to latest version"
+    log_info "Updating Vulkan headers to v1.4.347"
     local headers_dir="${WORKDIR}/vulkan-headers"
-    git clone --depth=1 "$VULKAN_HEADERS_REPO" "$headers_dir" 2>/dev/null || {
-        log_warn "Failed to clone Vulkan headers, using Mesa defaults"
+    local target_tag="${VULKAN_HEADERS_TAG:-v1.4.347}"
+
+    git clone --depth=1 --branch "$target_tag" "$VULKAN_HEADERS_REPO" "$headers_dir" 2>/dev/null || {
+        log_warn "Failed to clone Vulkan headers at $target_tag — using Mesa bundled headers"
         return 0
     }
-    if [[ -d "${headers_dir}/include/vulkan" ]]; then
-        cp -r "${headers_dir}/include/vulkan" "${MESA_DIR}/include/"
-        log_success "Vulkan headers updated"
-    else
+
+    if [[ ! -d "${headers_dir}/include/vulkan" ]]; then
         log_warn "Vulkan headers include dir not found, skipping"
+        return 0
     fi
+
+    cp -r "${headers_dir}/include/vulkan" "${MESA_DIR}/include/"
+
+    # v1.4.347 promoted VK_EXT_device_fault → VK_KHR_device_fault
+    # Mesa 26.1 generated code still references the old _EXT enum names
+    # Add backwards-compat aliases so the build succeeds
+    local compat_header="${MESA_DIR}/include/vulkan/vk_ext_device_fault_compat.h"
+    cat > "$compat_header" << 'COMPATEOF'
+#ifndef VK_EXT_DEVICE_FAULT_COMPAT_H
+#define VK_EXT_DEVICE_FAULT_COMPAT_H
+#ifdef VK_KHR_device_fault
+#ifndef VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT
+#define VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT     VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_KHR
+#endif
+#ifndef VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_EXT
+#define VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_EXT     VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_KHR
+#endif
+#ifndef VK_DEVICE_FAULT_ADDRESS_TYPE_NONE_EXT
+#define VK_DEVICE_FAULT_ADDRESS_TYPE_NONE_EXT     VK_DEVICE_FAULT_ADDRESS_TYPE_NONE_KHR
+#endif
+#ifndef VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_ONE_EXT
+#define VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_ONE_EXT     VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_ONE_KHR
+#endif
+#ifndef VkDeviceFaultAddressTypeEXT
+#define VkDeviceFaultAddressTypeEXT VkDeviceFaultAddressTypeKHR
+#endif
+#ifndef VkDeviceFaultVendorBinaryHeaderVersionEXT
+#define VkDeviceFaultVendorBinaryHeaderVersionEXT     VkDeviceFaultVendorBinaryHeaderVersionKHR
+#endif
+#ifndef VkDeviceFaultAddressInfoEXT
+#define VkDeviceFaultAddressInfoEXT VkDeviceFaultAddressInfoKHR
+#endif
+#ifndef VkDeviceFaultVendorInfoEXT
+#define VkDeviceFaultVendorInfoEXT VkDeviceFaultVendorInfoKHR
+#endif
+#ifndef VkDeviceFaultInfoEXT
+#define VkDeviceFaultInfoEXT VkDeviceFaultInfoKHR
+#endif
+#ifndef VkDeviceFaultCountsEXT
+#define VkDeviceFaultCountsEXT VkDeviceFaultCountsKHR
+#endif
+#endif
+#endif
+COMPATEOF
+
+    # Include the compat header from vulkan.h automatically
+    local vulkan_h="${MESA_DIR}/include/vulkan/vulkan.h"
+    if [[ -f "$vulkan_h" ]] && ! grep -q "vk_ext_device_fault_compat" "$vulkan_h"; then
+        echo '#include "vk_ext_device_fault_compat.h"' >> "$vulkan_h"
+    fi
+
+    log_success "Vulkan headers updated to $target_tag (with EXT→KHR compat aliases)"
 }
 
 apply_timeline_semaphore_fix() {
