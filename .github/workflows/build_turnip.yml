@@ -128,6 +128,11 @@ on:
         description: "Apply a7xx perf patches (LRZ preseed, storage UBWC, wave64, mesh cap)"
         default: true
 
+      enable_a7xx_visibility:
+        type: boolean
+        description: "Apply a7xx visibility fixes (LRZ fast_clear, occlusion query)"
+        default: true
+
       enable_vk14_promo:
         type: boolean
         description: "Force Vulkan 1.4 + subgroup/descriptor buffer features"
@@ -147,6 +152,11 @@ on:
         description: "Build number (e.g. 1 -> Turnip-26.1.0-B1)"
         required: false
         default: "1"
+
+      strict_mode:
+        type: boolean
+        description: "Abort build if critical patch fails (LRZ, EXT inject)"
+        default: false
 
       create_release:
         type: boolean
@@ -220,6 +230,8 @@ jobs:
       ENABLE_PERF:          ${{ inputs.enable_perf }}
       ENABLE_A7XX_COMPAT:   ${{ inputs.enable_a7xx_compat }}
       ENABLE_A7XX_PERF:     ${{ inputs.enable_a7xx_perf }}
+      ENABLE_A7XX_VIS:      ${{ inputs.enable_a7xx_visibility }}
+      STRICT_MODE:          ${{ inputs.strict_mode }}
       ENABLE_VK14_PROMO:    ${{ inputs.enable_vk14_promo }}
       ENABLE_SHADER_PERF:   ${{ inputs.enable_shader_perf }}
       ENABLE_CUSTOM_FLAGS:  ${{ inputs.enable_custom_flags }}
@@ -283,10 +295,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          key: ccache-a0xx-${{ inputs.build_variant }}-${{ needs.pre-check.outputs.mesa_ref }}-${{ env.CACHE_VERSION }}
+          key: ccache-${{ inputs.target_gpu }}-${{ inputs.build_variant }}-${{ needs.pre-check.outputs.mesa_ref }}-${{ env.CACHE_VERSION }}
           restore-keys: |
-            ccache-a0xx-${{ inputs.build_variant }}-
-            ccache-a0xx-
+            ccache-${{ inputs.target_gpu }}-${{ inputs.build_variant }}-
+            ccache-${{ inputs.target_gpu }}-
 
       - name: Cache Meson subproject downloads
         uses: actions/cache@v4
@@ -393,6 +405,7 @@ jobs:
             ${{ inputs.enable_ubwc_hack == true && '- UBWC 5/6 Support' || '' }}
             ${{ inputs.enable_perf == true && '- Performance Flags (-O3 + ARMv8.2-A)' || '' }}
             ${{ inputs.enable_a7xx_compat == true && '- a7xx Compat Patches' || '' }}
+            ${{ inputs.enable_a7xx_visibility == true && '- a7xx Visibility Fix (LRZ + Occlusion)' || '' }}
             ${{ inputs.enable_a7xx_perf == true && '- a7xx Performance Patches' || '' }}
             ${{ inputs.enable_vk14_promo == true && '- Vulkan 1.4 Promotion (apiVersion + features)' || '' }}
             ${{ inputs.enable_shader_perf == true && '- Shader Compiler Optimizations' || '' }}
@@ -421,6 +434,8 @@ jobs:
             echo "Vulkan API    : $(cat build/vulkan_version.txt 2>/dev/null || echo N/A)"
           fi
           echo "Artifacts     : $(ls build/*.zip 2>/dev/null | wc -l) file(s)"
+          echo "A7xx Vis Fix  : ${{ inputs.enable_a7xx_visibility }}"
+          echo "Strict Mode   : ${{ inputs.strict_mode }}"
           if [[ "${{ inputs.enable_custom_flags }}" == "true" ]]; then
             echo "TU_DEBUG      : ${{ inputs.custom_tu_debug }}"
           fi
