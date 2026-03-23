@@ -181,73 +181,28 @@ clone_mesa() {
 }
 
 update_vulkan_headers() {
-    log_info "Updating Vulkan headers to v1.4.347"
+    log_info "Updating Vulkan registry (vk.xml) to v1.4.347"
     local headers_dir="${WORKDIR}/vulkan-headers"
     local target_tag="${VULKAN_HEADERS_TAG:-v1.4.347}"
 
     git clone --depth=1 --branch "$target_tag" "$VULKAN_HEADERS_REPO" "$headers_dir" 2>/dev/null || {
-        log_warn "Failed to clone Vulkan headers at $target_tag — using Mesa bundled headers"
+        log_warn "Failed to clone Vulkan headers at $target_tag — using Mesa bundled registry"
         return 0
     }
 
-    if [[ ! -d "${headers_dir}/include/vulkan" ]]; then
-        log_warn "Vulkan headers include dir not found, skipping"
-        return 0
+    # ONLY update vk.xml registry — do NOT replace include/vulkan/
+    # Replacing include/vulkan/ breaks Mesa generated code (vk_enum_to_str.c)
+    # because the generator uses Mesa's own vk.xml with EXT names
+    # but new headers rename them to KHR
+    local new_xml="${headers_dir}/registry/vk.xml"
+    local mesa_xml="${MESA_DIR}/src/vulkan/registry/vk.xml"
+    if [[ -f "$new_xml" && -f "$mesa_xml" ]]; then
+        cp "$new_xml" "$mesa_xml"
+        log_success "Vulkan registry updated to $target_tag"
+    else
+        log_warn "vk.xml not found, skipping registry update"
     fi
-
-    cp -r "${headers_dir}/include/vulkan" "${MESA_DIR}/include/"
-
-    # v1.4.347 promoted VK_EXT_device_fault → VK_KHR_device_fault
-    # Mesa 26.1 generated code still references the old _EXT enum names
-    # Add backwards-compat aliases so the build succeeds
-    local compat_header="${MESA_DIR}/include/vulkan/vk_ext_device_fault_compat.h"
-    cat > "$compat_header" << 'COMPATEOF'
-#ifndef VK_EXT_DEVICE_FAULT_COMPAT_H
-#define VK_EXT_DEVICE_FAULT_COMPAT_H
-#ifdef VK_KHR_device_fault
-#ifndef VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT
-#define VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT     VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_KHR
-#endif
-#ifndef VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_EXT
-#define VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_EXT     VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_KHR
-#endif
-#ifndef VK_DEVICE_FAULT_ADDRESS_TYPE_NONE_EXT
-#define VK_DEVICE_FAULT_ADDRESS_TYPE_NONE_EXT     VK_DEVICE_FAULT_ADDRESS_TYPE_NONE_KHR
-#endif
-#ifndef VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_ONE_EXT
-#define VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_ONE_EXT     VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_ONE_KHR
-#endif
-#ifndef VkDeviceFaultAddressTypeEXT
-#define VkDeviceFaultAddressTypeEXT VkDeviceFaultAddressTypeKHR
-#endif
-#ifndef VkDeviceFaultVendorBinaryHeaderVersionEXT
-#define VkDeviceFaultVendorBinaryHeaderVersionEXT     VkDeviceFaultVendorBinaryHeaderVersionKHR
-#endif
-#ifndef VkDeviceFaultAddressInfoEXT
-#define VkDeviceFaultAddressInfoEXT VkDeviceFaultAddressInfoKHR
-#endif
-#ifndef VkDeviceFaultVendorInfoEXT
-#define VkDeviceFaultVendorInfoEXT VkDeviceFaultVendorInfoKHR
-#endif
-#ifndef VkDeviceFaultInfoEXT
-#define VkDeviceFaultInfoEXT VkDeviceFaultInfoKHR
-#endif
-#ifndef VkDeviceFaultCountsEXT
-#define VkDeviceFaultCountsEXT VkDeviceFaultCountsKHR
-#endif
-#endif
-#endif
-COMPATEOF
-
-    # Include the compat header from vulkan.h automatically
-    local vulkan_h="${MESA_DIR}/include/vulkan/vulkan.h"
-    if [[ -f "$vulkan_h" ]] && ! grep -q "vk_ext_device_fault_compat" "$vulkan_h"; then
-        echo '#include "vk_ext_device_fault_compat.h"' >> "$vulkan_h"
-    fi
-
-    log_success "Vulkan headers updated to $target_tag (with EXT→KHR compat aliases)"
 }
-
 apply_timeline_semaphore_fix() {
     log_info "Applying timeline semaphore fix"
     local tu_sync="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
