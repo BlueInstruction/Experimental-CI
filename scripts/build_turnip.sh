@@ -199,12 +199,12 @@ update_vulkan_headers() {
 
     cp -r "${headers_dir}/include/vulkan" "${MESA_DIR}/include/"
 
-    # Add EXT→KHR compat aliases if headers promote device_fault to KHR
+    # Add EXT→KHR compat aliases if KHR types exist but MAX_ENUM_EXT defines are missing
     local core_h="${MESA_DIR}/include/vulkan/vulkan_core.h"
     if [[ -f "$core_h" ]]; then
         local has_khr has_ext
         has_khr=$(grep -c "VkDeviceFaultAddressTypeKHR" "$core_h" 2>/dev/null || echo 0)
-        has_ext=$(grep -c "VkDeviceFaultAddressTypeEXT" "$core_h" 2>/dev/null || echo 0)
+        has_ext=$(grep -c "VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT" "$core_h" 2>/dev/null || echo 0)
         if [[ "$has_khr" -gt 0 && "$has_ext" -eq 0 ]]; then
             cat >> "$core_h" << 'COMPAT_EOF'
 
