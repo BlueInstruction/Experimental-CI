@@ -29,7 +29,7 @@ MESA_MIRROR="https://github.com/mesa3d/mesa.git"
 ROBCLARK_REPO="https://gitlab.freedesktop.org/robclark/mesa.git"
 AUTOTUNER_REPO="https://gitlab.freedesktop.org/PixelyIon/mesa.git"
 VULKAN_HEADERS_REPO="https://github.com/KhronosGroup/Vulkan-Headers.git"
-VULKAN_HEADERS_TAG="${VULKAN_HEADERS_TAG:-v1.4.347}"
+VULKAN_HEADERS_TAG="${VULKAN_HEADERS_TAG:-}"
 
 MESA_SOURCE="${MESA_SOURCE:-main_branch}"
 STAGING_BRANCH="${STAGING_BRANCH:-staging/26.0}"
@@ -181,70 +181,58 @@ clone_mesa() {
 }
 
 update_vulkan_headers() {
-    log_info "Updating Vulkan registry (vk.xml) to v1.4.347"
+    log_info "Updating Vulkan headers include to v1.4.347"
     local headers_dir="${WORKDIR}/vulkan-headers"
-    local target_tag="${VULKAN_HEADERS_TAG:-v1.4.347}"
+    # Auto-detect latest release tag from GitHub API
+    local target_tag="${VULKAN_HEADERS_TAG:-}"
+    if [[ -z "$target_tag" ]]; then
+        target_tag=$(curl -sL "https://api.github.com/repos/KhronosGroup/Vulkan-Headers/releases/latest" \
+            | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
+        [[ -z "$target_tag" ]] && target_tag="v1.4.347"
+        log_info "Auto-detected Vulkan Headers: $target_tag"
+    fi
 
     git clone --depth=1 --branch "$target_tag" "$VULKAN_HEADERS_REPO" "$headers_dir" 2>/dev/null || {
-        log_warn "Failed to clone Vulkan headers at $target_tag — using Mesa bundled registry"
+        log_warn "Failed to clone Vulkan headers at $target_tag — using Mesa bundled headers"
         return 0
     }
 
-    # ONLY update vk.xml registry — do NOT replace include/vulkan/
-    # Replacing include/vulkan/ breaks Mesa generated code (vk_enum_to_str.c)
-    # because the generator uses Mesa's own vk.xml with EXT names
-    # but new headers rename them to KHR
-    local new_xml="${headers_dir}/registry/vk.xml"
-    local mesa_xml="${MESA_DIR}/src/vulkan/registry/vk.xml"
-    if [[ ! -f "$new_xml" || ! -f "$mesa_xml" ]]; then
-        log_warn "vk.xml not found, skipping registry update"
+    if [[ ! -d "${headers_dir}/include/vulkan" ]]; then
+        log_warn "Vulkan headers include dir not found, skipping"
         return 0
     fi
 
-    cp "$new_xml" "$mesa_xml"
+    # Update ONLY the include/vulkan/ headers for new extension constants
+    # Do NOT replace vk.xml — Mesa 26.1 vk.xml uses EXT names internally
+    # and replacing it with v1.4.347 (KHR names) breaks generated C code
+    cp -r "${headers_dir}/include/vulkan" "${MESA_DIR}/include/"
 
-    # v1.4.347 vk.xml contains both FaultFeaturesEXT and FaultFeaturesKHR
-    # during the EXT→KHR promotion transition — Mesa's generator rejects duplicates.
-    # Remove the old EXT feature struct entries to keep only the KHR versions.
-    python3 - "$mesa_xml" << 'XMLFIX'
-import sys
-import xml.etree.ElementTree as ET
+    # v1.4.347 vulkan_core.h defines KHR types for device_fault
+    # but Mesa 26.1 source code still uses EXT names → add compat aliases
+    local core_h="${MESA_DIR}/include/vulkan/vulkan_core.h"
+    if [[ -f "$core_h" ]] && grep -q "VkDeviceFaultAddressTypeKHR" "$core_h" &&        ! grep -q "VkDeviceFaultAddressTypeEXT" "$core_h"; then
+        cat >> "$core_h" << 'COMPAT_EOF'
 
-fp = sys.argv[1]
-tree = ET.parse(fp)
-root = tree.getroot()
-removed = 0
+/* Mesa 26.1 compat: EXT aliases for promoted KHR device_fault types */
+typedef VkDeviceFaultAddressTypeKHR VkDeviceFaultAddressTypeEXT;
+typedef VkDeviceFaultVendorBinaryHeaderVersionKHR VkDeviceFaultVendorBinaryHeaderVersionEXT;
+typedef VkDeviceFaultFlagBitsKHR VkDeviceFaultFlagBitsEXT;
+typedef VkDeviceFaultAddressInfoKHR VkDeviceFaultAddressInfoEXT;
+typedef VkDeviceFaultVendorInfoKHR VkDeviceFaultVendorInfoEXT;
+typedef VkDeviceFaultInfoKHR VkDeviceFaultInfoEXT;
+typedef VkDeviceFaultCountsKHR VkDeviceFaultCountsEXT;
+typedef VkPhysicalDeviceFaultFeaturesKHR VkPhysicalDeviceFaultFeaturesEXT;
+#define VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_KHR
+#define VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_EXT VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_KHR
+#define VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_KHR
+#define VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_KHR
+#define VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_KHR
+COMPAT_EOF
+    fi
 
-types_node = root.find('types')
-if types_node is not None:
-    to_rm = [
-        t for t in list(types_node)
-        if t.get('name') == 'VkPhysicalDeviceFaultFeaturesEXT'
-        or (t.get('alias') == 'VkPhysicalDeviceFaultFeaturesKHR'
-            and (t.get('name') or '').endswith('EXT'))
-    ]
-    for t in to_rm:
-        types_node.remove(t)
-        removed += 1
-
-extensions_node = root.find('extensions')
-if extensions_node is not None:
-    khr_ok = any(e.get('name') == 'VK_KHR_device_fault' for e in extensions_node)
-    if khr_ok:
-        to_rm = [e for e in list(extensions_node) if e.get('name') == 'VK_EXT_device_fault']
-        for e in to_rm:
-            extensions_node.remove(e)
-            removed += 1
-
-with open(fp, 'wb') as f:
-    ET.indent(tree)
-    tree.write(f, encoding='utf-8', xml_declaration=True)
-
-print(f'[OK] vk.xml: removed {removed} EXT->KHR duplicate entries')
-XMLFIX
-
-    log_success "Vulkan registry updated to $target_tag (EXT/KHR compat fixed)"
+    log_success "Vulkan headers updated to $target_tag (include only, vk.xml unchanged)"
 }
+
 apply_timeline_semaphore_fix() {
     log_info "Applying timeline semaphore fix"
     local tu_sync="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
