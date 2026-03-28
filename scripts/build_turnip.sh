@@ -181,39 +181,34 @@ clone_mesa() {
 }
 
 update_vulkan_headers() {
-    log_info "Updating Vulkan headers include to v1.4.347"
     local headers_dir="${WORKDIR}/vulkan-headers"
-    # Auto-detect latest release tag from GitHub API
     local target_tag="${VULKAN_HEADERS_TAG:-}"
     if [[ -z "$target_tag" ]]; then
         target_tag=$(curl -sL "https://api.github.com/repos/KhronosGroup/Vulkan-Headers/releases/latest" \
-            | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
+            | grep -oP '"tag_name":\s*"\K[^"]+' | head -1 || true)
         [[ -z "$target_tag" ]] && target_tag="v1.4.347"
-        log_info "Auto-detected Vulkan Headers: $target_tag"
     fi
+    log_info "Updating Vulkan headers to $target_tag"
 
     git clone --depth=1 --branch "$target_tag" "$VULKAN_HEADERS_REPO" "$headers_dir" 2>/dev/null || {
-        log_warn "Failed to clone Vulkan headers at $target_tag — using Mesa bundled headers"
+        log_warn "Failed to clone Vulkan headers — using Mesa bundled headers"
         return 0
     }
 
-    if [[ ! -d "${headers_dir}/include/vulkan" ]]; then
-        log_warn "Vulkan headers include dir not found, skipping"
-        return 0
-    fi
+    [[ ! -d "${headers_dir}/include/vulkan" ]] && { log_warn "Headers dir missing"; return 0; }
 
-    # Update ONLY the include/vulkan/ headers for new extension constants
-    # Do NOT replace vk.xml — Mesa 26.1 vk.xml uses EXT names internally
-    # and replacing it with v1.4.347 (KHR names) breaks generated C code
     cp -r "${headers_dir}/include/vulkan" "${MESA_DIR}/include/"
 
-    # v1.4.347 vulkan_core.h defines KHR types for device_fault
-    # but Mesa 26.1 source code still uses EXT names → add compat aliases
+    # Add EXT→KHR compat aliases if headers promote device_fault to KHR
     local core_h="${MESA_DIR}/include/vulkan/vulkan_core.h"
-    if [[ -f "$core_h" ]] && grep -q "VkDeviceFaultAddressTypeKHR" "$core_h" &&        ! grep -q "VkDeviceFaultAddressTypeEXT" "$core_h"; then
-        cat >> "$core_h" << 'COMPAT_EOF'
+    if [[ -f "$core_h" ]]; then
+        local has_khr has_ext
+        has_khr=$(grep -c "VkDeviceFaultAddressTypeKHR" "$core_h" 2>/dev/null || echo 0)
+        has_ext=$(grep -c "VkDeviceFaultAddressTypeEXT" "$core_h" 2>/dev/null || echo 0)
+        if [[ "$has_khr" -gt 0 && "$has_ext" -eq 0 ]]; then
+            cat >> "$core_h" << 'COMPAT_EOF'
 
-/* Mesa 26.1 compat: EXT aliases for promoted KHR device_fault types */
+/* Mesa compat: EXT aliases for promoted KHR device_fault types */
 typedef VkDeviceFaultAddressTypeKHR VkDeviceFaultAddressTypeEXT;
 typedef VkDeviceFaultVendorBinaryHeaderVersionKHR VkDeviceFaultVendorBinaryHeaderVersionEXT;
 typedef VkDeviceFaultFlagBitsKHR VkDeviceFaultFlagBitsEXT;
@@ -228,9 +223,11 @@ typedef VkPhysicalDeviceFaultFeaturesKHR VkPhysicalDeviceFaultFeaturesEXT;
 #define VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_KHR
 #define VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_KHR
 COMPAT_EOF
+            log_info "Device fault EXT→KHR compat aliases added"
+        fi
     fi
 
-    log_success "Vulkan headers updated to $target_tag (include only, vk.xml unchanged)"
+    log_success "Vulkan headers updated to $target_tag"
 }
 
 apply_timeline_semaphore_fix() {
