@@ -207,29 +207,40 @@ update_vulkan_headers() {
     # during the EXT→KHR promotion transition — Mesa's generator rejects duplicates.
     # Remove the old EXT feature struct entries to keep only the KHR versions.
     python3 - "$mesa_xml" << 'XMLFIX'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
+import sys
+import xml.etree.ElementTree as ET
 
-# Remove <type category="struct" name="VkPhysicalDeviceFaultFeaturesEXT"...>...</type>
-# and the corresponding <type alias=...> entries
-c = re.sub(
-    r'<type[^>]*name="VkPhysicalDeviceFaultFeaturesEXT"[^/]*/?>(?:.*?</type>)?',
-    '', c, flags=re.DOTALL
-)
-# Remove <require> blocks that only contain EXT fault feature entries
-c = re.sub(
-    r'\s*<member[^>]*><type>VkBool32</type>\s*<name>deviceFault(?:VendorBinary)?</name></member>\s*(?=.*FaultFeaturesEXT)',
-    '', c, flags=re.DOTALL
-)
-# Remove extension entries for VK_EXT_device_fault if KHR version exists
-if 'VK_KHR_device_fault' in c:
-    c = re.sub(
-        r'<extension[^>]*name="VK_EXT_device_fault"[^>]*/?>(?:.*?</extension>)?',
-        '', c, flags=re.DOTALL
-    )
-with open(fp, 'w') as f: f.write(c)
-print("[OK] vk.xml: removed EXT→KHR duplicate fault entries")
+fp = sys.argv[1]
+tree = ET.parse(fp)
+root = tree.getroot()
+removed = 0
+
+types_node = root.find('types')
+if types_node is not None:
+    to_rm = [
+        t for t in list(types_node)
+        if t.get('name') == 'VkPhysicalDeviceFaultFeaturesEXT'
+        or (t.get('alias') == 'VkPhysicalDeviceFaultFeaturesKHR'
+            and (t.get('name') or '').endswith('EXT'))
+    ]
+    for t in to_rm:
+        types_node.remove(t)
+        removed += 1
+
+extensions_node = root.find('extensions')
+if extensions_node is not None:
+    khr_ok = any(e.get('name') == 'VK_KHR_device_fault' for e in extensions_node)
+    if khr_ok:
+        to_rm = [e for e in list(extensions_node) if e.get('name') == 'VK_EXT_device_fault']
+        for e in to_rm:
+            extensions_node.remove(e)
+            removed += 1
+
+with open(fp, 'wb') as f:
+    ET.indent(tree)
+    tree.write(f, encoding='utf-8', xml_declaration=True)
+
+print(f'[OK] vk.xml: removed {removed} EXT->KHR duplicate entries')
 XMLFIX
 
     log_success "Vulkan registry updated to $target_tag (EXT/KHR compat fixed)"
