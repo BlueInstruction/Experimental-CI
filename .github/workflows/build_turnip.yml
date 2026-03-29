@@ -47,7 +47,6 @@ on:
           - vanilla
           - debug
           - profile
-
       target_gpu:
         type: choice
         description: "Target GPU"
@@ -97,8 +96,7 @@ on:
 
       enable_deck_emu:
         type: boolean
-        description: "Enable GPU identity spoof"
-        default: true
+        description: "Enable GPU identity spoof"        default: true
 
       deck_emu_target:
         type: choice
@@ -147,10 +145,63 @@ on:
         type: boolean
         description: "Create GitHub Release"
         default: true
-
       release_as_draft:
         type: boolean
         description: "Save release as draft"
+        default: false
+
+      enable_viewport_clamp:
+        type: boolean
+        description: "Apply Viewport/Scissor clamp fix (prevents GPU faults)"
+        default: true
+
+      enable_timeline_fix:
+        type: boolean
+        description: "Apply vk_sync_timeline safety fix (optional compatibility)"
+        default: false
+
+      enable_a750_autotune:
+        type: boolean
+        description: "Enable A750 Dynamic GMEM/SYSMEM Balancer (Gen3 only)"
+        default: true
+
+      a750_gmem_limit_mb:
+        type: choice
+        description: "GMEM threshold for A750 autotune (MB)"
+        default: "4"
+        options:
+          - "3"
+          - "4"
+          - "5"
+          - "6"
+
+      a750_drawcall_threshold:
+        type: choice
+        description: "Draw call density threshold for A750 bypass"
+        default: "500"
+        options:
+          - "200"
+          - "500"
+          - "1000"
+          - "2000"
+
+      enable_autotune_logging:
+        type: boolean
+        description: "Enable TU_DEBUG=LOG_AUTOTUNE verbose logging"
+        default: false
+
+      enable_present_wait_fix:
+        type: boolean
+        description: "Enable KHR_present_wait optimization for vkd3d-proton"
+        default: true
+      enable_frame_pacing:
+        type: boolean
+        description: "Enable frame pacing optimization for Winlator"
+        default: true
+
+      enable_vsync_bypass:
+        type: boolean
+        description: "Enable VSync bypass for fake frame boost"
         default: false
 
 permissions:
@@ -192,8 +243,7 @@ jobs:
   build-turnip:
     needs: pre-check
     if: needs.pre-check.outputs.validated == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
+    runs-on: ubuntu-latest    timeout-minutes: 180
 
     env:
       MESA_SOURCE:          ${{ inputs.mesa_source }}
@@ -221,6 +271,15 @@ jobs:
       ENABLE_CUSTOM_FLAGS:  ${{ inputs.enable_custom_flags }}
       CUSTOM_TU_DEBUG:      ${{ inputs.custom_tu_debug }}
       BUILD_NUMBER:         ${{ inputs.build_number }}
+      ENABLE_VIEWPORT_CLAMP: ${{ inputs.enable_viewport_clamp }}
+      ENABLE_TIMELINE_FIX: ${{ inputs.enable_timeline_fix }}
+      ENABLE_A750_AUTOTUNE: ${{ inputs.enable_a750_autotune }}
+      A750_GMEM_LIMIT_MB: ${{ inputs.a750_gmem_limit_mb }}
+      A750_DRAWCALL_THRESHOLD: ${{ inputs.a750_drawcall_threshold }}
+      ENABLE_AUTOTUNE_LOGGING: ${{ inputs.enable_autotune_logging }}
+      ENABLE_PRESENT_WAIT_FIX: ${{ inputs.enable_present_wait_fix }}
+      ENABLE_FRAME_PACING: ${{ inputs.enable_frame_pacing }}
+      ENABLE_VSYNC_BYPASS: ${{ inputs.enable_vsync_bypass }}
       CFLAGS_EXTRA: >-
         ${{ inputs.enable_perf == true
             && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only'
@@ -234,7 +293,6 @@ jobs:
             && '-Wl,--gc-sections -Wl,--icf=safe'
             || '-Wl,--gc-sections' }}
       BUILD_SCRIPT: "build_turnip.sh"
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -283,7 +341,6 @@ jobs:
           restore-keys: |
             ccache-${{ inputs.target_gpu }}-${{ inputs.build_variant }}-
             ccache-${{ inputs.target_gpu }}-
-
       - name: Cache Meson subproject downloads
         uses: actions/cache@v4
         with:
@@ -333,8 +390,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.build.outputs.filename || 'turnip-a0xx' }}
-          path: build/*.zip
-          retention-days: 30
+          path: build/*.zip          retention-days: 30
           compression-level: 0
 
       - name: Create GitHub Release
@@ -375,7 +431,7 @@ jobs:
             | `rast_order` | VGT prefetch hint |
             | `log_skip_gmem_ops` | Loop unroll hint |
 
-            > In Winlator: Container Settings → Environment Variables → TU_DEBUG
+            > In Winlator: Container Settings -> Environment Variables -> TU_DEBUG
 
             ### Features
             ${{ inputs.enable_ext_spoof == true && '- Vulkan Extensions Unlock' || '' }}
@@ -383,10 +439,12 @@ jobs:
             ${{ inputs.enable_timeline_hack == true && '- Timeline Semaphore Optimization' || '' }}
             ${{ inputs.enable_ubwc_hack == true && '- UBWC 5/6 Support' || '' }}
             ${{ inputs.enable_perf == true && '- Performance Flags (-O3 + ARMv8.2-A)' || '' }}
-            ${{ inputs.enable_a7xx_patches == true && '- a7xx Patches (Compat + Perf + Visibility)' || '' }}
-            ${{ inputs.enable_vk14_promo == true && '- Vulkan 1.4 Promotion (apiVersion + features)' || '' }}
+            ${{ inputs.enable_a7xx_patches == true && '- a7xx Patches (Compat + Perf + Visibility)' || '' }}            ${{ inputs.enable_vk14_promo == true && '- Vulkan 1.4 Promotion (apiVersion + features)' || '' }}
             ${{ inputs.enable_shader_perf == true && '- Shader Compiler Optimizations' || '' }}
             ${{ inputs.enable_custom_flags == true && format('- TU_DEBUG: {0}', inputs.custom_tu_debug) || '' }}
+            ${{ inputs.enable_viewport_clamp == true && '- Viewport Clamp Fix' || '' }}
+            ${{ inputs.enable_a750_autotune == true && '- A750 Dynamic Autotune' || '' }}
+            ${{ inputs.enable_present_wait_fix == true && '- Present Wait Optimization' || '' }}
 
             Compiled from Mesa freedreno
           files: build/*.zip
