@@ -96,7 +96,8 @@ on:
 
       enable_deck_emu:
         type: boolean
-        description: "Enable GPU identity spoof"        default: true
+        description: "Enable GPU identity spoof"        
+        default: true
 
       deck_emu_target:
         type: choice
