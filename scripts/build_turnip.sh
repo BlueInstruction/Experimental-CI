@@ -198,8 +198,9 @@ update_vulkan_headers() {
     [[ ! -d "${headers_dir}/include/vulkan" ]] && { log_warn "Headers dir missing"; return 0; }
     cp -r "${headers_dir}/include/vulkan" "${MESA_DIR}/include/"
 
-    # Always append EXT→KHR compat aliases — #ifndef guards prevent double-definition
-    # Mesa 26.1 generated code uses EXT names, new headers promote them to KHR
+    # New headers promote VK_EXT_device_fault → VK_KHR_device_fault
+    # The struct typedefs (VkDeviceFaultInfoEXT etc.) already exist in both old and new headers
+    # Only the MAX_ENUM_EXT enum values and sType defines are missing — add them with #ifndef
     local core_h="${MESA_DIR}/include/vulkan/vulkan_core.h"
     if [[ -f "$core_h" ]]; then
         cat >> "$core_h" << 'COMPAT_EOF'
@@ -209,30 +210,6 @@ update_vulkan_headers() {
 #endif
 #ifndef VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_EXT
 #define VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_EXT VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_KHR
-#endif
-#ifndef VkDeviceFaultAddressTypeEXT
-typedef VkDeviceFaultAddressTypeKHR VkDeviceFaultAddressTypeEXT;
-#endif
-#ifndef VkDeviceFaultVendorBinaryHeaderVersionEXT
-typedef VkDeviceFaultVendorBinaryHeaderVersionKHR VkDeviceFaultVendorBinaryHeaderVersionEXT;
-#endif
-#ifndef VkDeviceFaultFlagBitsEXT
-typedef VkDeviceFaultFlagBitsKHR VkDeviceFaultFlagBitsEXT;
-#endif
-#ifndef VkDeviceFaultAddressInfoEXT
-typedef VkDeviceFaultAddressInfoKHR VkDeviceFaultAddressInfoEXT;
-#endif
-#ifndef VkDeviceFaultVendorInfoEXT
-typedef VkDeviceFaultVendorInfoKHR VkDeviceFaultVendorInfoEXT;
-#endif
-#ifndef VkDeviceFaultInfoEXT
-typedef VkDeviceFaultInfoKHR VkDeviceFaultInfoEXT;
-#endif
-#ifndef VkDeviceFaultCountsEXT
-typedef VkDeviceFaultCountsKHR VkDeviceFaultCountsEXT;
-#endif
-#ifndef VkPhysicalDeviceFaultFeaturesEXT
-typedef VkPhysicalDeviceFaultFeaturesKHR VkPhysicalDeviceFaultFeaturesEXT;
 #endif
 #ifndef VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT
 #define VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_KHR
@@ -244,7 +221,7 @@ typedef VkPhysicalDeviceFaultFeaturesKHR VkPhysicalDeviceFaultFeaturesEXT;
 #define VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_KHR
 #endif
 COMPAT_EOF
-        log_info "Device fault EXT/KHR compat aliases appended to vulkan_core.h"
+        log_info "Device fault MAX_ENUM_EXT compat defines appended"
     fi
 
     log_success "Vulkan headers updated to $target_tag"
