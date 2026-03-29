@@ -196,35 +196,55 @@ update_vulkan_headers() {
     }
 
     [[ ! -d "${headers_dir}/include/vulkan" ]] && { log_warn "Headers dir missing"; return 0; }
-
     cp -r "${headers_dir}/include/vulkan" "${MESA_DIR}/include/"
 
-    # Add EXT→KHR compat aliases if KHR types exist but MAX_ENUM_EXT defines are missing
+    # Always append EXT→KHR compat aliases — #ifndef guards prevent double-definition
+    # Mesa 26.1 generated code uses EXT names, new headers promote them to KHR
     local core_h="${MESA_DIR}/include/vulkan/vulkan_core.h"
     if [[ -f "$core_h" ]]; then
-        local has_khr has_ext
-        has_khr=$(grep -c "VkDeviceFaultAddressTypeKHR" "$core_h" 2>/dev/null || echo 0)
-        has_ext=$(grep -c "VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT" "$core_h" 2>/dev/null || echo 0)
-        if [[ "$has_khr" -gt 0 && "$has_ext" -eq 0 ]]; then
-            cat >> "$core_h" << 'COMPAT_EOF'
+        cat >> "$core_h" << 'COMPAT_EOF'
 
-/* Mesa compat: EXT aliases for promoted KHR device_fault types */
-typedef VkDeviceFaultAddressTypeKHR VkDeviceFaultAddressTypeEXT;
-typedef VkDeviceFaultVendorBinaryHeaderVersionKHR VkDeviceFaultVendorBinaryHeaderVersionEXT;
-typedef VkDeviceFaultFlagBitsKHR VkDeviceFaultFlagBitsEXT;
-typedef VkDeviceFaultAddressInfoKHR VkDeviceFaultAddressInfoEXT;
-typedef VkDeviceFaultVendorInfoKHR VkDeviceFaultVendorInfoEXT;
-typedef VkDeviceFaultInfoKHR VkDeviceFaultInfoEXT;
-typedef VkDeviceFaultCountsKHR VkDeviceFaultCountsEXT;
-typedef VkPhysicalDeviceFaultFeaturesKHR VkPhysicalDeviceFaultFeaturesEXT;
+#ifndef VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT
 #define VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_KHR
+#endif
+#ifndef VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_EXT
 #define VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_EXT VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_KHR
+#endif
+#ifndef VkDeviceFaultAddressTypeEXT
+typedef VkDeviceFaultAddressTypeKHR VkDeviceFaultAddressTypeEXT;
+#endif
+#ifndef VkDeviceFaultVendorBinaryHeaderVersionEXT
+typedef VkDeviceFaultVendorBinaryHeaderVersionKHR VkDeviceFaultVendorBinaryHeaderVersionEXT;
+#endif
+#ifndef VkDeviceFaultFlagBitsEXT
+typedef VkDeviceFaultFlagBitsKHR VkDeviceFaultFlagBitsEXT;
+#endif
+#ifndef VkDeviceFaultAddressInfoEXT
+typedef VkDeviceFaultAddressInfoKHR VkDeviceFaultAddressInfoEXT;
+#endif
+#ifndef VkDeviceFaultVendorInfoEXT
+typedef VkDeviceFaultVendorInfoKHR VkDeviceFaultVendorInfoEXT;
+#endif
+#ifndef VkDeviceFaultInfoEXT
+typedef VkDeviceFaultInfoKHR VkDeviceFaultInfoEXT;
+#endif
+#ifndef VkDeviceFaultCountsEXT
+typedef VkDeviceFaultCountsKHR VkDeviceFaultCountsEXT;
+#endif
+#ifndef VkPhysicalDeviceFaultFeaturesEXT
+typedef VkPhysicalDeviceFaultFeaturesKHR VkPhysicalDeviceFaultFeaturesEXT;
+#endif
+#ifndef VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT
 #define VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_KHR
+#endif
+#ifndef VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT
 #define VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_KHR
+#endif
+#ifndef VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT
 #define VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_KHR
+#endif
 COMPAT_EOF
-            log_info "Device fault EXT→KHR compat aliases added"
-        fi
+        log_info "Device fault EXT/KHR compat aliases appended to vulkan_core.h"
     fi
 
     log_success "Vulkan headers updated to $target_tag"
