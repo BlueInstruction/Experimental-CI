@@ -92,7 +92,7 @@ on:
 
       enable_ext_spoof:
         type: boolean
-        description: "Unlock all Vulkan extensions (300+)"
+        description: "Unlock all Vulkan extensions"
         default: true
 
       enable_deck_emu:
@@ -192,7 +192,7 @@ jobs:
   build-turnip:
     needs: pre-check
     if: needs.pre-check.outputs.validated == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 180
 
     env:
@@ -233,7 +233,7 @@ jobs:
         ${{ inputs.enable_perf == true
             && '-Wl,--gc-sections -Wl,--icf=safe'
             || '-Wl,--gc-sections' }}
-      BUILD_SCRIPT: "scripts/build_turnip.sh"
+      BUILD_SCRIPT: "build_turnip.sh"
 
     steps:
       - name: Checkout repository
@@ -292,11 +292,6 @@ jobs:
           restore-keys: |
             meson-wraps-${{ needs.pre-check.outputs.mesa_ref }}-
             meson-wraps-
-
-      - name: Prepare build script
-        run: |
-          chmod +x "${{ env.BUILD_SCRIPT }}"
-          find scripts/ -name "*.py" -exec chmod +x {} \;
 
       - name: Build Turnip Driver
         id: build
@@ -383,7 +378,7 @@ jobs:
             > In Winlator: Container Settings → Environment Variables → TU_DEBUG
 
             ### Features
-            ${{ inputs.enable_ext_spoof == true && '- Vulkan Extensions Unlock (300+)' || '' }}
+            ${{ inputs.enable_ext_spoof == true && '- Vulkan Extensions Unlock' || '' }}
             ${{ inputs.enable_deck_emu == true && format('- GPU Spoof: {0}', inputs.deck_emu_target) || '' }}
             ${{ inputs.enable_timeline_hack == true && '- Timeline Semaphore Optimization' || '' }}
             ${{ inputs.enable_ubwc_hack == true && '- UBWC 5/6 Support' || '' }}
