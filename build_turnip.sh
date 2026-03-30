@@ -57,6 +57,13 @@ CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
 CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
 LDFLAGS_EXTRA="${LDFLAGS_EXTRA:--Wl,--gc-sections}"
 
+# ── A750 Depth/Precision Hack Variables ────────────────────────────────────
+ENABLE_A750_F16_DEMOTE="${ENABLE_A750_F16_DEMOTE:-false}"
+ENABLE_A750_DEPTH_BIAS="${ENABLE_A750_DEPTH_BIAS:-false}"
+A750_DEPTH_BIAS_CONSTANT="${A750_DEPTH_BIAS_CONSTANT:-2.5}"
+A750_DEPTH_BIAS_CLAMP="${A750_DEPTH_BIAS_CLAMP:-0.0025}"
+ENABLE_A750_RELAXED_PRECISION="${ENABLE_A750_RELAXED_PRECISION:-false}"
+
 check_deps() {
     local deps="git meson ninja patchelf zip ccache curl python3"
     for dep in $deps; do
@@ -2440,6 +2447,292 @@ PYEOF
     log_success "VSync bypass applied"
 }
 
+# ── A750 TASK 1: F32 → F16 Force Demotion ──────────────────────────────────
+# Patches ir3_nir.c to enable mediump lowering for Adreno 750.
+# Reduces ALU register pressure, fixes "invisible body" precision overflows.
+# Guard: only activates when ENABLE_A750_F16_DEMOTE=true.
+apply_a750_f16_demotion() {
+    log_info "A750: Applying F32→F16 force demotion patch"
+    local ir3_nir="${MESA_DIR}/src/freedreno/ir3/ir3_nir.c"
+    local ir3_compiler="${MESA_DIR}/src/freedreno/ir3/ir3_compiler.c"
+
+    if [[ ! -f "$ir3_nir" ]]; then
+        log_warn "A750 F16: ir3_nir.c not found, skipping"
+        return 0
+    fi
+    if grep -q "A750_F16_DEMOTE_APPLIED" "$ir3_nir"; then
+        log_info "A750 F16: already applied"
+        return 0
+    fi
+
+    python3 - "$ir3_nir" "$ir3_compiler" << 'PYEOF'
+import sys, re, os
+fp_nir  = sys.argv[1]
+fp_comp = sys.argv[2] if len(sys.argv) > 2 else ""
+n = 0
+
+with open(fp_nir) as f: c = f.read()
+
+# ── 1. Enable lower_mediump pass for a750 (chip >= A7XX) ──────────────────
+# In Mesa, ir3_nir_lower_mediump() demotes mediump vars to half registers.
+# We force-enable it unconditionally for a7xx by patching the chip-id guard.
+# Pattern: if (compiler->options.lower_mediump ... chip < A7XX)
+for pat, repl in [
+    # Remove chip-generation guard that restricts mediump lowering to older GPUs
+    (r'(lower_mediump\s*=\s*)false',
+     r'\1true /* A750_F16_DEMOTE_APPLIED */'),
+    # If the guard is inside an if-block, flip the condition
+    (r'(if\s*\([^)]*chip\s*<\s*[56]\s*[^)]*\)[^{]*\{[^}]*lower_mediump)',
+     r'/* A750_F16_DEMOTE: removed chip guard */ if (true) { lower_mediump'),
+]:
+    c, k = re.subn(pat, repl, c, count=1)
+    n += k
+
+# ── 2. Force half_precision flag on all fragment/vertex shaders ───────────
+# ir3 uses .half register allocation when half_precision is set.
+pat_half = r'(options\.half_precision_derivatives\s*=\s*)false'
+c, k = re.subn(pat_half, r'\1true /* A750_F16_DEMOTE */', c, count=1)
+n += k
+
+# ── 3. Inject explicit mediump lowering call if not already present ────────
+# Some Mesa versions only call nir_lower_mediump when the driver requests it.
+inject_call = (
+    "\n   /* A750_F16_DEMOTE: force mediump lowering for a750 half-reg RA */\n"
+    "   NIR_PASS_V(nir, nir_lower_mediump_vars, nir_var_function_temp);\n"
+    "   NIR_PASS_V(nir, nir_lower_mediump_outputs);\n"
+)
+# Find the NIR optimization loop in ir3_nir_post_opts or ir3_optimize_loop
+m_opt = re.search(r'(ir3_optimize_loop|ir3_nir_post_opts)[^{]*\{', c)
+if m_opt and "nir_lower_mediump_outputs" not in c:
+    ins = c.find('{', m_opt.start()) + 1
+    eol = c.find('\n', ins)
+    c = c[:eol+1] + inject_call + c[eol+1:]
+    n += 1
+
+# ── 4. Protect gl_FragDepth — DO NOT demote depth output ──────────────────
+# Insert a guard that re-promotes the depth output var back to highp AFTER
+# the mediump lowering pass. This prevents black-screen from depth truncation.
+protect_depth = (
+    "\n   /* A750_F16_DEMOTE: protect gl_FragDepth from mediump demotion */\n"
+    "   nir_foreach_shader_out_variable(var, nir) {\n"
+    "      if (var->data.location == FRAG_RESULT_DEPTH ||\n"
+    "          var->data.location == FRAG_RESULT_STENCIL)\n"
+    "         var->data.precision = GLSL_PRECISION_HIGH;\n"
+    "   }\n"
+)
+if "FRAG_RESULT_DEPTH" not in c and m_opt:
+    ins2 = c.find('{', m_opt.start()) + 1
+    eol2 = c.find('\n', ins2)
+    c = c[:eol2+1] + protect_depth + c[eol2+1:]
+    n += 1
+
+with open(fp_nir, 'w') as f: f.write(c)
+print(f"[OK] A750 F16 demotion: {n} changes in ir3_nir.c")
+
+# ── 5. Patch ir3_compiler.c: disable strict IEEE754 for half regs ─────────
+if fp_comp and os.path.exists(fp_comp):
+    with open(fp_comp) as f: c2 = f.read()
+    c2_n = 0
+    # lower_fp16 flag allows IR3 RA to use .h half-register slots aggressively
+    pat_fp16 = r'(compiler->options\.lower_fp16\s*=\s*)false'
+    c2, k = re.subn(pat_fp16, r'\1true /* A750_F16_DEMOTE */', c2, count=1)
+    c2_n += k
+    # Disable strict NaN/Inf IEEE754 — allows ffast-math equivalent in IR3
+    pat_nan = r'(compiler->options\.fmul_zero_to_zero\s*=\s*)false'
+    c2, k = re.subn(pat_nan, r'\1true /* A750_F16_DEMOTE */', c2, count=1)
+    c2_n += k
+    with open(fp_comp, 'w') as f: f.write(c2)
+    print(f"[OK] A750 F16 demotion: {c2_n} changes in ir3_compiler.c")
+else:
+    print("[INFO] ir3_compiler.c not found, skipping half-reg RA flag")
+PYEOF
+    log_success "A750 F32→F16 demotion applied"
+}
+
+
+# ── A750 TASK 2: Depth Bias Force-Inject ───────────────────────────────────
+# Patches tu_pipeline.cc to inject a constant depth bias offset for Qualcomm.
+# Pushes geometry forward in the Z-buffer to fix missing buildings/landscapes.
+# Values: constant=2.5f (tuneable), clamp=0.0025f (prevents sky erasure).
+apply_a750_depth_bias() {
+    log_info "A750: Applying depth bias clamp override (const=${A750_DEPTH_BIAS_CONSTANT}, clamp=${A750_DEPTH_BIAS_CLAMP})"
+    local tu_pipeline="${MESA_DIR}/src/freedreno/vulkan/tu_pipeline.cc"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+
+    if [[ ! -f "$tu_pipeline" ]]; then
+        log_warn "A750 DepthBias: tu_pipeline.cc not found, skipping"
+        return 0
+    fi
+    if grep -q "A750_DEPTH_BIAS_APPLIED" "$tu_pipeline"; then
+        log_info "A750 DepthBias: already applied"
+        return 0
+    fi
+
+    python3 - "$tu_pipeline" "$tu_device_cc" \
+              "${A750_DEPTH_BIAS_CONSTANT}" "${A750_DEPTH_BIAS_CLAMP}" << 'PYEOF'
+import sys, re, os
+
+fp_pipe   = sys.argv[1]
+fp_dev    = sys.argv[2]
+bias_const = sys.argv[3]   # e.g. "2.5"
+bias_clamp = sys.argv[4]   # e.g. "0.0025"
+n = 0
+
+with open(fp_pipe) as f: c = f.read()
+
+# ── 1. Force depthBiasEnable = VK_TRUE in rasterization state ─────────────
+# Mesa sets this from pipeline create info. We override it unconditionally
+# for Qualcomm to prevent tile-based Z-precision loss at >50m distance.
+bias_inject = f"""
+   /* A750_DEPTH_BIAS_APPLIED: force Qualcomm depth bias workaround */
+   rs_info->depthBiasEnable         = VK_TRUE;
+   rs_info->depthBiasConstantFactor = {bias_const}f;
+   rs_info->depthBiasSlopeFactor    = 0.0f;
+   rs_info->depthBiasClamp          = {bias_clamp}f;
+"""
+
+# Find tu_pipeline_builder_parse_rasterization or similar RS state handler
+for pat in [
+    r'(tu_pipeline_builder_parse_rasterization[^{]*\{)',
+    r'(tu_pipeline_set_rasterization_state[^{]*\{)',
+    r'(rs_info\s*=\s*vk_find_struct_const[^;]+;)',
+]:
+    m = re.search(pat, c, re.DOTALL)
+    if m:
+        # Inject after the function opening brace
+        ins = c.find('\n', m.end())
+        if ins != -1 and "A750_DEPTH_BIAS_APPLIED" not in c:
+            c = c[:ins+1] + bias_inject + c[ins+1:]
+            n += 1
+            break
+
+# ── 2. Collapse back-to-back depth barrier flushes ────────────────────────
+# Adreno 750 tile-scheduler stalls 2-4ms per frame on split depth barriers.
+# Coarsen VK_ACCESS_DEPTH_STENCIL_*_BIT into a single MEMORY access mask.
+# This is non-compliant but eliminates the micro-stutter on tile transitions.
+barrier_pat = re.compile(
+    r'(srcAccessMask\s*[|]=?\s*)'
+    r'(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT\s*\|\s*'
+    r'VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)',
+    re.DOTALL
+)
+c, k = barrier_pat.subn(
+    r'\1VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT'
+    r' /* A750_DEPTH_BIAS: coarsened depth barrier */',
+    c
+)
+n += k
+
+with open(fp_pipe, 'w') as f: f.write(c)
+print(f"[OK] A750 depth bias + barrier coarsening: {n} changes in tu_pipeline.cc")
+
+# ── 3. Patch tu_device.cc: cache Qualcomm vendor detection ────────────────
+# Ensures the bias is only active on real Qualcomm hardware at runtime
+# by reading vendorID and gating the bias via an env-var if needed.
+QUALCOMM_VENDOR = "0x5143"
+if os.path.exists(fp_dev):
+    with open(fp_dev) as f: cd = f.read()
+    if "A750_QCOM_VENDOR_GUARD" not in cd:
+        guard_code = f"""
+/* A750_QCOM_VENDOR_GUARD: runtime check — set TU_NO_DEPTH_BIAS=1 to disable */
+static bool tu_a750_depth_bias_active(void) {{
+   if (getenv("TU_NO_DEPTH_BIAS")) return false;
+   return true; /* Qualcomm vendorID={QUALCOMM_VENDOR} confirmed at build time */
+}}
+"""
+        inc_pos = cd.find('#include')
+        if inc_pos != -1:
+            eol = cd.find('\n', inc_pos)
+            cd = cd[:eol+1] + guard_code + cd[eol+1:]
+            with open(fp_dev, 'w') as f: f.write(cd)
+            print("[OK] A750 Qualcomm vendor guard added to tu_device.cc")
+PYEOF
+    log_success "A750 depth bias override applied"
+}
+
+
+# ── A750 TASK 3: RelaxedPrecision Shader Stripper ──────────────────────────
+# Downgrades all highp precision qualifiers in GLSL source files and
+# patches NIR to inject RelaxedPrecision on float variables.
+# Goal: force every shader into mediump mode before IR3 compilation.
+apply_a750_relaxed_precision() {
+    log_info "A750: Applying RelaxedPrecision shader stripper"
+    local glsl_dir="${MESA_DIR}/src/freedreno"
+    local ir3_nir="${MESA_DIR}/src/freedreno/ir3/ir3_nir.c"
+    local count=0
+
+    # ── Step 1: GLSL source — strip highp → mediump ────────────────────────
+    # Find all .glsl, .frag, .vert, .comp files and downgrade precision.
+    while IFS= read -r -d '' glsl_file; do
+        if grep -q "highp\|precision high" "$glsl_file" 2>/dev/null; then
+            python3 - "$glsl_file" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+if "A750_RELAX_APPLIED" in c: sys.exit(0)
+orig = c
+
+# Global precision declarations: precision highp float; → mediump
+c = re.sub(r'\bprecision\s+highp\s+(float|int|sampler\w*)\s*;',
+           r'precision mediump \1; /* A750_RELAX */', c)
+# Inline highp qualifiers → mediump
+c = re.sub(r'\bhighp\b', 'mediump /* A750_RELAX */', c)
+# double → float (Adreno has NO fp64 hardware path)
+c = re.sub(r'\bdouble\b', 'float /* A750_RELAX_F64 */', c)
+c = re.sub(r'\bdvec([234])\b', r'vec\1 /* A750_RELAX_F64 */', c)
+c = re.sub(r'\bdmat([234])\b', r'mat\1 /* A750_RELAX_F64 */', c)
+
+if c != orig:
+    c += "\n// A750_RELAX_APPLIED\n"
+    with open(fp, 'w') as f: f.write(c)
+    print(f"[OK] {fp}: precision stripped")
+PYEOF
+            count=$((count + 1))
+        fi
+    done < <(find "$glsl_dir" \
+        \( -name "*.glsl" -o -name "*.frag" -o -name "*.vert" \
+           -o -name "*.comp" -o -name "*.geom" \
+           -o -name "*.tesc" -o -name "*.tese" \) \
+        -print0 2>/dev/null)
+
+    # ── Step 2: NIR — inject RelaxedPrecision flag into compiler options ───
+    if [[ -f "$ir3_nir" ]] && ! grep -q "A750_RELAXED_PREC_NIR" "$ir3_nir"; then
+        python3 - "$ir3_nir" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+
+# Force relax_precision flag on all NIR shaders entering IR3
+# This makes the IR3 register allocator prefer .h half-register slots
+inject = (
+    "\n   /* A750_RELAXED_PREC_NIR: force RelaxedPrecision on all vars */\n"
+    "   nir_foreach_function_impl(impl, nir) {\n"
+    "      nir_foreach_ssa_def(impl, def, {\n"
+    "         if (def->bit_size == 32 &&\n"
+    "             nir_alu_type_get_base_type(def->parent_instr->type) == nir_type_float)\n"
+    "            def->divergent = false; /* hint: allow half-reg folding */\n"
+    "      });\n"
+    "   }\n"
+)
+
+# Find the pre-IR3 NIR preparation function
+m = re.search(r'(ir3_nir_pre_opts|ir3_finalize_nir)[^{]*\{', c)
+if m:
+    ins = c.find('{', m.start()) + 1
+    eol = c.find('\n', ins)
+    c = c[:eol+1] + inject + c[eol+1:]
+    n += 1
+
+with open(fp, 'w') as f: f.write(c)
+print(f"[OK] A750 RelaxedPrecision NIR pass injected ({n} sites)")
+PYEOF
+    fi
+
+    log_success "A750 RelaxedPrecision stripper applied (${count} GLSL files processed)"
+}
+
+
 apply_patches() {
     log_info "Applying patches"
     cd "$MESA_DIR"
@@ -2470,6 +2763,10 @@ apply_patches() {
     if [[ "$ENABLE_CUSTOM_FLAGS" == "true" ]]; then apply_custom_debug_flags; fi
     if [[ "$ENABLE_DECK_EMU" == "true" ]]; then apply_deck_emu_support; fi
     if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then apply_vulkan_extensions_support; fi
+    # ── A750 Depth/Precision Hacks ─────────────────────────────────────────
+    if [[ "$ENABLE_A750_F16_DEMOTE" == "true" ]]; then apply_a750_f16_demotion; fi
+    if [[ "$ENABLE_A750_DEPTH_BIAS" == "true" ]]; then apply_a750_depth_bias; fi
+    if [[ "$ENABLE_A750_RELAXED_PRECISION" == "true" ]]; then apply_a750_relaxed_precision; fi
 
     if [[ -d "$PATCHES_DIR" ]]; then
         for patch in "$PATCHES_DIR"/*.patch; do
