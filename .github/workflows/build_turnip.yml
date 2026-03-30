@@ -141,6 +141,41 @@ on:
         description: "Enable A750 Dynamic Autotune"
         default: true
 
+      # ── A750 Depth/Precision Hack Controls ──────────────────────────────
+      enable_a750_f16_demote:
+        type: boolean
+        description: "A750: Force F32→F16 demotion (reduces ALU pressure, fixes invisible geometry)"
+        default: false
+
+      enable_a750_depth_bias:
+        type: boolean
+        description: "A750: Force depth bias injection (fixes missing buildings/landscapes)"
+        default: false
+
+      a750_depth_bias_constant:
+        type: choice
+        description: "A750 Depth Bias Constant Factor (higher = push geometry more forward)"
+        default: "2.5"
+        options:
+          - "1.75"
+          - "2.0"
+          - "2.5"
+          - "3.0"
+
+      a750_depth_bias_clamp:
+        type: choice
+        description: "A750 Depth Bias Clamp (prevents sky/terrain overlap)"
+        default: "0.0025"
+        options:
+          - "0.001"
+          - "0.0025"
+          - "0.005"
+
+      enable_a750_relaxed_precision:
+        type: boolean
+        description: "A750: RelaxedPrecision shader stripper (downgrades all highp → mediump)"
+        default: false
+
       a750_gmem_limit_mb:
         type: choice
         description: "GMEM threshold (MB)"
@@ -238,7 +273,7 @@ jobs:
               echo "patch_flags=ENABLE_TIMELINE_HACK=true ENABLE_UBWC_HACK=true APPLY_PATCH_SERIES=true ENABLE_EXT_SPOOF=true ENABLE_VIEWPORT_CLAMP=true ENABLE_TIMELINE_FIX=true" >> $GITHUB_OUTPUT
               ;;
             experimental)
-              echo "patch_flags=ENABLE_TIMELINE_HACK=true ENABLE_UBWC_HACK=true APPLY_PATCH_SERIES=true ENABLE_EXT_SPOOF=true ENABLE_VIEWPORT_CLAMP=true ENABLE_TIMELINE_FIX=true" >> $GITHUB_OUTPUT
+              echo "patch_flags=ENABLE_TIMELINE_HACK=true ENABLE_UBWC_HACK=true APPLY_PATCH_SERIES=true ENABLE_EXT_SPOOF=true ENABLE_VIEWPORT_CLAMP=true ENABLE_TIMELINE_FIX=true ENABLE_A750_F16_DEMOTE=true ENABLE_A750_DEPTH_BIAS=true ENABLE_A750_RELAXED_PRECISION=true" >> $GITHUB_OUTPUT
               ;;
           esac
 
@@ -287,6 +322,11 @@ jobs:
       TU_FORCE_IMMEDIATE_PRESENT: ${{ inputs.frame_control_preset != 'disabled' && '1' || '0' }}
       PATCH_PRESET: ${{ inputs.patch_preset }}
       FRAME_CONTROL_PRESET: ${{ inputs.frame_control_preset }}${{ needs.pre-check.outputs.patch_flags }}${{ needs.pre-check.outputs.frame_flags }}
+      ENABLE_A750_F16_DEMOTE: ${{ inputs.enable_a750_f16_demote }}
+      ENABLE_A750_DEPTH_BIAS: ${{ inputs.enable_a750_depth_bias }}
+      A750_DEPTH_BIAS_CONSTANT: ${{ inputs.a750_depth_bias_constant }}
+      A750_DEPTH_BIAS_CLAMP: ${{ inputs.a750_depth_bias_clamp }}
+      ENABLE_A750_RELAXED_PRECISION: ${{ inputs.enable_a750_relaxed_precision }}
       CFLAGS_EXTRA: >-
         ${{ inputs.enable_perf == true
             && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only'
@@ -451,6 +491,9 @@ jobs:
             ${{ inputs.enable_a750_autotune == true && '- A750 Dynamic Autotune' || '' }}
             - Patch Preset: `${{ inputs.patch_preset }}`
             - Frame Control: `${{ inputs.frame_control_preset }}`
+            ${{ inputs.enable_a750_f16_demote == true && '- ⚡ A750 F32→F16 Force Demotion' || '' }}
+            ${{ inputs.enable_a750_depth_bias == true && format('- 🔧 A750 Depth Bias (const={0}, clamp={1})', inputs.a750_depth_bias_constant, inputs.a750_depth_bias_clamp) || '' }}
+            ${{ inputs.enable_a750_relaxed_precision == true && '- 🎯 A750 RelaxedPrecision Shader Stripper' || '' }}
 
             ### Dynamic Control via ADB
             ```bash
