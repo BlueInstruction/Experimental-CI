@@ -141,7 +141,6 @@ on:
         description: "Enable A750 Dynamic Autotune"
         default: true
 
-      # ── A750 Depth/Precision Hack Controls ──────────────────────────────
       enable_a750_f16_demote:
         type: boolean
         description: "A750: Force F32→F16 demotion (reduces ALU pressure, fixes invisible geometry)"
@@ -224,7 +223,7 @@ env:
 
 jobs:
   pre-check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       validated: ${{ steps.validate.outputs.ok }}
       mesa_ref: ${{ steps.resolve.outputs.ref }}
