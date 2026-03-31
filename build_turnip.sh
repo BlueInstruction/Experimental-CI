@@ -36,9 +36,20 @@ STAGING_BRANCH="${STAGING_BRANCH:-staging/26.0}"
 CUSTOM_TAG="${CUSTOM_TAG:-}"
 BUILD_TYPE="${BUILD_TYPE:-release}"
 BUILD_VARIANT="${BUILD_VARIANT:-optimized}"
+fetch_latest_ndk_version() {
+    local tag
+    tag=$(curl -sL "https://api.github.com/repos/android/ndk/releases/latest" \
+        | grep -oP '"tag_name":\s*"\Kr[0-9]+[a-z]?' | head -1 || true)
+    [[ -n "$tag" ]] && echo "android-ndk-${tag}" || echo "android-ndk-r29"
+}
+NDK_VERSION="${NDK_VERSION:-$(fetch_latest_ndk_version)}"
 NDK_PATH="${NDK_PATH:-/opt/android-ndk}"
 API_LEVEL="${API_LEVEL:-35}"
-TARGET_GPU="${TARGET_GPU:-a0xx}"
+if [[ "${BUILD_VARIANT:-patched}" == "patched" ]]; then
+    TARGET_GPU="${TARGET_GPU:-a7xx}"
+else
+    TARGET_GPU="${TARGET_GPU:-a0xx}"
+fi
 ENABLE_PERF="${ENABLE_PERF:-false}"
 MESA_LOCAL_PATH="${MESA_LOCAL_PATH:-}"
 ENABLE_EXT_SPOOF="${ENABLE_EXT_SPOOF:-true}"
@@ -57,12 +68,8 @@ CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
 CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
 LDFLAGS_EXTRA="${LDFLAGS_EXTRA:--Wl,--gc-sections}"
 
-# ── A750 Depth/Precision Hack Variables ────────────────────────────────────
-# Expanded from A750_HACK_PRESET at runtime (set by GitHub Actions pre-check)
-# Direct env override still works: export ENABLE_A750_F16_DEMOTE=true etc.
 A750_HACK_PRESET="${A750_HACK_PRESET:-none}"
 
-# Expand preset → individual flags (mirrors the yml pre-check logic)
 case "$A750_HACK_PRESET" in
     safe)
         ENABLE_A750_F16_DEMOTE="${ENABLE_A750_F16_DEMOTE:-true}"
@@ -247,43 +254,12 @@ update_vulkan_headers() {
     [[ ! -d "${headers_dir}/include/vulkan" ]] && { log_warn "Headers dir missing"; return 0; }
     cp -r "${headers_dir}/include/vulkan" "${MESA_DIR}/include/"
 
-    # Add bidirectional EXT↔KHR compat defines for device_fault promotion
     local core_h="${MESA_DIR}/include/vulkan/vulkan_core.h"
     if [[ -f "$core_h" ]]; then
         cat >> "$core_h" << 'COMPAT_EOF'
 
 /* EXT→KHR: Mesa generated code uses EXT, new headers promote to KHR */
-#ifndef VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT
-#define VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_KHR
-#endif
-#ifndef VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_EXT
-#define VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_EXT VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_KHR
-#endif
-#ifndef VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT
-#define VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_KHR
-#endif
-#ifndef VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT
-#define VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_KHR
-#endif
-#ifndef VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT
-#define VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_KHR
-#endif
 /* KHR→EXT: Mesa generated code uses KHR, old headers only have EXT */
-#ifndef VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_KHR
-#define VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_KHR VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT
-#endif
-#ifndef VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_KHR
-#define VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_KHR VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT
-#endif
-#ifndef VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_KHR
-#define VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_KHR VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT
-#endif
-#ifndef VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_KHR
-#define VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_KHR 0x7FFFFFFF
-#endif
-#ifndef VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_KHR
-#define VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_KHR 0x7FFFFFFF
-#endif
 COMPAT_EOF
         log_info "Device fault EXT/KHR bidirectional compat defines appended"
     fi
@@ -358,214 +334,6 @@ PYEOF
 }
 
 
-apply_a8xx_patches() {
-    log_info "Applying a8xx-specific patches"
-    local kgsl_file="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
-    local dev_info_h="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"
-    local cmd_buffer="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
-    local gmem_cache="${MESA_DIR}/src/freedreno/common/fd6_gmem_cache.h"
-    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
-
-    if [[ "$ENABLE_UBWC_HACK" == "true" ]] && [[ -f "$kgsl_file" ]]; then
-    python3 - "$kgsl_file" << 'PYEOF'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-
-defines = (
-    "\n#ifndef KGSL_UBWC_5_0\n"
-    "#define KGSL_UBWC_5_0 5\n"
-    "#endif\n"
-    "#ifndef KGSL_UBWC_6_0\n"
-    "#define KGSL_UBWC_6_0 6\n"
-    "#endif\n"
-)
-
-if "#define KGSL_UBWC_5_0" not in c:
-    first_include = c.find("#include")
-    if first_include != -1:
-        eol = c.find("\n", first_include)
-        c = c[:eol+1] + defines + c[eol+1:]
-        print("[OK] KGSL_UBWC_5_0/6_0 defines added")
-    else:
-        print("[WARN] No #include found, skipping defines")
-        sys.exit(0)
-else:
-    print("[OK] KGSL_UBWC_5_0 already defined")
-
-if "case KGSL_UBWC_5_0" in c or "case 5:" in c:
-    with open(fp, "w") as f: f.write(c)
-    print("[OK] UBWC 5/6 cases already present from patch series")
-    sys.exit(0)
-
-ubwc_pat = re.compile(r"case KGSL_UBWC_4_0.*?break;", re.DOTALL)
-m4 = ubwc_pat.search(c)
-if not m4:
-    ubwc_pat = re.compile(r"case KGSL_UBWC_3_0.*?break;", re.DOTALL)
-    m4 = ubwc_pat.search(c)
-
-if not m4:
-    with open(fp, "w") as f: f.write(c)
-    print("[WARN] UBWC switch not found, defines only")
-    sys.exit(0)
-
-# Find the FULL lvalue expression that writes bank_swizzle_levels/macrotile_mode
-# Pattern: device->ubwc_config.bank_swizzle_levels — must capture 'device->ubwc_config'
-case_body = c[m4.start():m4.end()]
-
-# Capture full expression: optional 'ptr->' prefix + struct name
-# e.g. 'device->ubwc_config.bank_swizzle_levels' -> lval='device->ubwc_config'
-# e.g. 'ubwc_config.bank_swizzle_levels'         -> lval='ubwc_config'
-lval_pat = re.compile(
-    r'((?:\w+->)?\w+)\.(bank_swizzle_levels|macrotile_mode)'
-)
-lval_m = lval_pat.search(case_body)
-
-if not lval_m:
-    # Fallback: any ptr->field or var.field assignment in the case body
-    lval_m = re.search(r'((?:\w+->)?\w+)\.(\w+)\s*=', case_body)
-
-if not lval_m:
-    with open(fp, "w") as f: f.write(c)
-    print("[WARN] ubwc lval not found in case body, defines only")
-    sys.exit(0)
-
-lval = lval_m.group(1)
-
-default_m = re.search(r'[ \t]*default\s*:', c[m4.end():])
-if not default_m:
-    with open(fp, "w") as f: f.write(c)
-    print("[WARN] default: not found, defines only")
-    sys.exit(0)
-
-ins = m4.end() + default_m.start()
-inject = (
-    "   case 5:\n"
-    "   case 6:\n"
-    f"      {lval}.bank_swizzle_levels = 0x6;\n"
-    f"      {lval}.macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n"
-    "      break;\n"
-)
-c = c[:ins] + inject + c[ins:]
-with open(fp, "w") as f: f.write(c)
-print(f"[OK] UBWC 5/6 cases inserted (lval={lval}.)")
-
-PYEOF
-        log_success "UBWC 5.0/6.0 support applied"
-    fi
-
-    if [[ -f "$cmd_buffer" ]] \
-        && grep -q "disable_gmem" "$dev_info_h" 2>/dev/null \
-        && ! grep -q "A8XX_DISABLE_GMEM" "$cmd_buffer"; then
-        python3 - "$cmd_buffer" << 'PYEOF'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-inject = "\n   /* A8XX_DISABLE_GMEM */\n   if (cmd->device->physical_device->dev_info.props.disable_gmem) {\n      cmd->state.rp.gmem_disable_reason = \"Unsupported GPU\";\n      return true;\n   }\n"
-pat = r'use_sysmem_rendering\s*\([^)]*\)\s*\{'
-m = re.search(pat, c)
-if m:
-    ins = c.find("\n", c.find("{", m.start())) + 1
-    c = c[:ins] + inject + c[ins:]
-    with open(fp, "w") as f: f.write(c)
-    print("[OK] A8xx force-sysmem added to use_sysmem_rendering")
-else:
-    print("[WARN] use_sysmem_rendering not found, skipping")
-PYEOF
-        log_success "A8xx sysmem guard added"
-    fi
-
-    if [[ -f "$gmem_cache" ]] && ! grep -q "A8XX_GMEM_OFFSET_FIX" "$gmem_cache"; then
-        python3 - "$gmem_cache" << 'PYEOF'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-pat = r'if\s*\(\s*info->chip\s*>=\s*8\s*&&\s*info->num_slices\s*>\s*1\s*\)[^}]*\}'
-m = re.search(pat, c, re.DOTALL)
-if m:
-    c = c[:m.start()] + '/* A8XX_GMEM_OFFSET_FIX */' + c[m.end():]
-    with open(fp, 'w') as f: f.write(c)
-    print('[OK] A8xx gmem cache offset removed')
-else:
-    print('[INFO] gmem offset block not found (may already be patched)')
-PYEOF
-        log_success "A8xx gmem cache offset fix applied"
-    fi
-
-    if [[ -f "$tu_device_cc" ]] && ! grep -q "A8XX_FLUSHALL_REMOVED" "$tu_device_cc"; then
-        python3 - "$tu_device_cc" << 'PYEOF'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-pat = r'if\s*\([^)]*chip\s*==\s*A8XX[^)]*\)[^{]*\{[^}]*TU_DEBUG_FLUSHALL[^}]*\}'
-m = re.search(pat, c, re.DOTALL)
-if m:
-    c = c[:m.start()] + '/* A8XX_FLUSHALL_REMOVED */' + c[m.end():]
-    with open(fp, 'w') as f: f.write(c)
-    print('[OK] A8xx forced FLUSHALL removed')
-else:
-    print('[INFO] FLUSHALL block not found in this version')
-PYEOF
-        log_success "A8xx FLUSHALL removed"
-    fi
-
-    local devices_py="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
-    if [[ -f "$devices_py" ]] && ! grep -q "A8XX_DEVICES_INJECTED" "$devices_py"; then
-        python3 - "$devices_py" << 'PYEOF'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-
-a8xx_ids = {
-    '810': [('0x44010000', 'FD810')],
-    '825': [('0x44030000', 'FD825')],
-    '829': [('0x44030A00', 'FD829'), ('0x44030A20', 'FD829'), ('0xffff44030A00', 'FD829')],
-    '830': [('0x44050000', 'FD830'), ('0x44050001', 'FD830'), ('0xffff44050000', 'FD830')],
-    '840': [('0xffff44050A31', 'FD840'), ('0x44050A00', 'FD840')],
-}
-
-inject = '# A8XX_DEVICES_INJECTED\n'
-added = []
-for gpu, ids in a8xx_ids.items():
-    if all(chip_id in c for chip_id, _ in ids):
-        continue
-    id_lines = '\n'.join(f"        GPUId(chip_id={chip_id}, name=\"{name}\")," for chip_id, name in ids)
-    num_ccu = 2 if gpu == '810' else 4
-    num_slices = 1 if gpu == '810' else 2
-    inject += f"""
-add_gpus([
-{id_lines}
-    ], A6xxGPUInfo(
-        CHIP.A8XX,
-        [a7xx_base, a7xx_gen3, a8xx_base],
-        num_ccu = {num_ccu},
-        num_slices = {num_slices},
-        tile_align_w = 96,
-        tile_align_h = 32,
-        tile_max_w = 16416,
-        tile_max_h = 16384,
-        num_vsc_pipes = 32,
-        cs_shared_mem_size = 32 * 1024,
-        wave_granularity = 2,
-        fibers_per_sp = 128 * 2 * 16,
-        magic_regs = dict(),
-        raw_magic_regs = a8xx_base_raw_magic_regs,
-    ))
-"""
-    added.append(gpu)
-
-if added:
-    c += '\n' + inject
-    with open(fp, 'w') as f: f.write(c)
-    print(f'[OK] A8xx device entries appended at end of file: {added}')
-else:
-    print('[OK] All a8xx GPU entries already present in Mesa')
-PYEOF
-        log_success "A8xx device entries checked/injected"
-    fi
-
-    log_success "A8xx patches complete"
-}
 
 
 apply_vulkan_extensions_vk_fallback() {
@@ -777,13 +545,11 @@ INJECT = """
    ext->NV_win32_keyed_mutex = true;
 """
 
-# Find get_device_extensions function and inject before its closing brace
 m = re.search(r'(get_device_extensions\s*\([^)]*\)\s*\{)', c)
 if not m:
     m = re.search(r'(tu_get_device_extensions\s*\([^)]*\)\s*\{)', c)
 
 if m:
-    # Find the matching closing brace
     depth = 0
     pos = m.start()
     start_brace = c.find('{', m.start())
@@ -799,7 +565,6 @@ if m:
     with open(fp, 'w') as f: f.write(c)
     print(f'[OK] EXT injection: added {INJECT.count("ext->")} extensions to get_device_extensions')
 else:
-    # Fallback: flip false->true pattern
     n = 0
     for pat in [
         r'(\.(?:KHR|EXT|AMD|QCOM|NV|NVX|VALVE|GOOGLE|IMG|INTEL|MESA)_[A-Za-z0-9_]+\s*=\s*)false\b',
@@ -812,7 +577,6 @@ else:
     print(f'[OK] EXT fallback: flipped {n} bits')
 
 FORCEEOF
-    # Direct struct field injection + vk_extensions.py table + vk.xml
     local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
     local vk_phys="${MESA_DIR}/src/vulkan/runtime/vk_physical_device.c"
 
@@ -822,8 +586,6 @@ import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 
-# These extensions need both the ext struct field AND the feature struct field
-# We inject all of them unconditionally at the end of get_device_extensions
 FORCE_FIELDS = [
     "KHR_unified_image_layouts",
     "KHR_cooperative_matrix",
@@ -862,7 +624,6 @@ FORCE_FIELDS = [
 inject_lines = "\n".join(f"   ext->{f} = true;" for f in FORCE_FIELDS)
 inject = "\n   /* FORCE_EXT_FIELDS_APPLIED */\n" + inject_lines + "\n"
 
-# Find get_device_extensions closing brace
 m = re.search(r'(get_device_extensions\s*\([^)]*\)\s*\{)', c)
 if not m:
     m = re.search(r'(tu_get_device_extensions\s*\([^)]*\)\s*\{)', c)
@@ -881,15 +642,12 @@ if m:
     n = len(FORCE_FIELDS)
     print(f"[OK] Force ext fields injected: {n} extensions")
 else:
-    # Already injected via EXT_INJECT_APPLIED
     c += "\n/* FORCE_EXT_FIELDS_APPLIED */\n"
     with open(fp, "w") as f: f.write(c)
     print("[OK] Force ext marker added (EXT_INJECT already covers this)")
 FORCEEOF
     fi
 
-    # Patch vk_physical_device.c: override pPropertyCount calculation
-    # Mesa computes count from ext struct bits — we need to ADD our count on top
     if [[ -f "$vk_phys" ]] && ! grep -q "FORCE_EXT_COUNT_PATCH" "$vk_phys"; then
     python3 - "$vk_phys" << 'FORCEEOF'
 import sys, re
@@ -932,13 +690,10 @@ static void _append_force_exts(uint32_t *cnt, VkExtensionProperties *props) {{
 }}
 """
 
-# Find the enumerate function — in Mesa 26.1 it's vk_physical_device_enumerate_extensions_2
-# Find its return statement and inject our append before it
 fn_pat = re.compile(r'vk_physical_device_enumerate_extensions_2\s*\([^{]+\{', re.DOTALL)
 m = fn_pat.search(c)
 
 if m:
-    # Find matching closing brace
     depth, i = 0, c.find("{", m.start())
     end_brace = -1
     while i < len(c):
@@ -951,20 +706,17 @@ if m:
         i += 1
 
     if end_brace != -1:
-        # Find last return before closing brace
         fn_body = c[m.start():end_brace]
         last_ret = fn_body.rfind("return")
         if last_ret != -1:
             ins = m.start() + last_ret
             c = c[:ins] + "   _append_force_exts(pPropertyCount, pProperties);\n" + c[ins:]
 
-    # Add struct before function
     c = c[:m.start()] + inject_struct + c[m.start():]
     with open(fp, "w") as f: f.write(c)
     print(f"[OK] Force ext count patch applied ({len(FORCE_EXTS)} extensions)")
 else:
     print("[WARN] vk_physical_device_enumerate_extensions_2 not found — skipping")
-    # Still write marker
     c += "\n/* FORCE_EXT_COUNT_PATCH */\n"
     with open(fp, "w") as f: f.write(c)
 
@@ -1067,11 +819,7 @@ with open(fp_ext, 'w') as f: f.write(c)
 print(f'[OK] Phase 1: flipped {flipped}, Phase 2: added {len(added_exts)} upscaler exts')
 
 STUBS = """
-#include "tu_device.h"
-#include "tu_cmd_buffer.h"
-#ifdef __cplusplus
 extern "C" {
-#endif
 
 VKAPI_ATTR VkResult VKAPI_CALL
 tu_GetPhysicalDeviceOpticalFlowImageFormatsNV(
@@ -1154,9 +902,7 @@ VKAPI_ATTR VkResult VKAPI_CALL
 tu_ReleaseFullScreenExclusiveModeEXT(VkDevice d, VkSwapchainKHR sc)
 { return VK_SUCCESS; }
 
-#ifdef __cplusplus
 }
-#endif
 """
 
 with open(fp_stubs, 'w') as f: f.write(STUBS)
@@ -1212,8 +958,6 @@ fp, vendor_id, device_id, driver_version, device_name = sys.argv[1:6]
 with open(fp) as f: c = f.read()
 
 turbo_init = """
-#include <fcntl.h>
-#include <unistd.h>
 /* DECK_EMU_PERF_INIT */
 static void
 tu_deck_perf_init(void)
@@ -1801,7 +1545,6 @@ import sys, re, os
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 
-# Auto-detect Vulkan patch version from headers
 def detect_vk_patch(mesa_dir):
     candidates = [
         os.path.join(mesa_dir, "include", "vulkan", "vulkan_core.h"),
@@ -1917,7 +1660,6 @@ fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n = 0
 
-# subgroupSize: a750 has 64-lane waves in most stages
 for pat in [
     r'(subgroupSize\s*=\s*)\d+',
     r'(props->subgroupSize\s*=\s*)\d+',
@@ -1925,7 +1667,6 @@ for pat in [
     c, k = re.subn(pat, r'\g<1>64 /* A7XX_SUBGROUP_FIXED */', c, count=1)
     n += k
 
-# minSubgroupSize / maxSubgroupSize
 for pat, val in [
     (r'(minSubgroupSize\s*=\s*)\d+', '64'),
     (r'(maxSubgroupSize\s*=\s*)\d+', '128'),
@@ -1933,14 +1674,12 @@ for pat, val in [
     c, k = re.subn(pat, rf'\g<1>{val}', c, count=1)
     n += k
 
-# supportedStages: all stages
 pat_stages = r'(subgroupSupportedStages\s*=\s*)[^;]+'
 c, k = re.subn(pat_stages,
     r'\1VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_TASK_BIT_EXT',
     c, count=1)
 n += k
 
-# supportedOperations: enable all
 pat_ops = r'(subgroupSupportedOperations\s*=\s*)[^;]+'
 c, k = re.subn(pat_ops,
     r'\1VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_VOTE_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT | VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_SHUFFLE_BIT | VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT | VK_SUBGROUP_FEATURE_CLUSTERED_BIT | VK_SUBGROUP_FEATURE_QUAD_BIT | VK_SUBGROUP_FEATURE_ROTATE_BIT_KHR | VK_SUBGROUP_FEATURE_ROTATE_CLUSTERED_BIT_KHR',
@@ -1977,7 +1716,6 @@ for field in FIELDS:
     c, k = re.subn(pat, r'\1true /* DESC_BUFFER_FEATURES_APPLIED */', c, count=1)
     n += k
 
-# descriptor buffer size limits - ensure reasonable values
 for pat, val in [
     (r'(robustBufferAccessUpdateAfterBind\s*=\s*)false', 'true'),
     (r'(shaderInputAttachmentArrayDynamicIndexing\s*=\s*)false', 'true'),
@@ -2007,7 +1745,6 @@ fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n = 0
 
-# maxPushConstantsSize: vkd3d-proton needs 256 for D3D12 root constants
 for pat in [
     r'(maxPushConstantsSize\s*=\s*)\d+',
     r'(props->maxPushConstantsSize\s*=\s*)\d+',
@@ -2015,12 +1752,10 @@ for pat in [
     c, k = re.subn(pat, r'\g<1>256 /* MEM_PERF_APPLIED */', c, count=1)
     n += k
 
-# maxBoundDescriptorSets: D3D12 needs at least 8
 pat_sets = r'(maxBoundDescriptorSets\s*=\s*)([1-7])\b'
 c, k = re.subn(pat_sets, r'\g<1>8', c)
 n += k
 
-# maxDescriptorSetSamplers: increase for complex games
 pat_samp = r'(maxDescriptorSetSamplers\s*=\s*)(\d+)'
 def boost_samplers(m):
     val = int(m.group(2))
@@ -2028,8 +1763,6 @@ def boost_samplers(m):
 c, k = re.subn(pat_samp, boost_samplers, c)
 n += k
 
-# timestampPeriod: fix for accurate frame timing on a750
-# a750 GPU timer runs at ~19.2MHz RBBM
 for pat in [
     r'(timestampPeriod\s*=\s*)[0-9.f]+',
     r'(props->timestampPeriod\s*=\s*)[0-9.f]+',
@@ -2058,13 +1791,10 @@ fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n = 0
 
-# Force DONT_CARE for depth/stencil store when not read back
-# Pattern: depth attachment store op assigned to STORE
 pat = r'(storeOp\s*=\s*)VK_ATTACHMENT_STORE_OP_STORE(\s*;[^\n]*depth)'
 c, k = re.subn(pat, r'\1VK_ATTACHMENT_STORE_OP_DONT_CARE /* RENDERPASS_OPT_APPLIED */ \2', c)
 n += k
 
-# Allow lazy allocation flag on transient attachments
 pat2 = r'(transientAttachment\s*&&[^{]*\{)'
 m = re.search(pat2, c, re.DOTALL)
 if m:
@@ -2097,8 +1827,6 @@ n = 0
 
 with open(fp_nir) as f: c = f.read()
 
-# Increase NIR loop unroll threshold for a7xx
-# Default is usually 32 or 64 iterations
 pat = r'(nir_opt_loop_unroll[^;]*max_unroll_iterations\s*=\s*)(\d+)'
 m = re.search(pat, c)
 if m:
@@ -2107,7 +1835,6 @@ if m:
         c = re.sub(pat, lambda x: x.group(1) + '128', c, count=1)
         n += 1
 
-# Enable aggressive instruction combining for ir3
 pat2 = r'(nir_opt_algebraic_before_ffma[^;]*;)'
 if re.search(pat2, c):
     m2 = re.search(pat2, c)
@@ -2119,7 +1846,6 @@ with open(fp_nir, 'w') as f: f.write(c)
 
 if fp_comp and __import__('os').path.exists(fp_comp):
     with open(fp_comp) as f: c2 = f.read()
-    # Increase max_const for compute shaders on a7xx
     pat3 = r'(compiler->max_const_compute\s*=\s*)(\d+)'
     m3 = re.search(pat3, c2)
     if m3:
@@ -2268,7 +1994,6 @@ def patch_vk_extensions(vk_ext_py_path):
         print("[OK] vk_extensions.py already patched")
         return
 
-    # Fix __init__ to handle None ext_version
     if "self.ext_version = int(ext_version)" in c:
         c = c.replace(
             "self.ext_version = int(ext_version)",
@@ -2328,7 +2053,6 @@ if __name__ == "__main__":
     if len(sys.argv) >= 3:
         patch_vk_xml(sys.argv[2])
     else:
-        # Auto-detect vk.xml relative to vk_extensions.py
         base = os.path.dirname(sys.argv[1])
         xml_candidates = [
             os.path.join(base, "..", "..", "registry", "vk.xml"),
@@ -2410,17 +2134,12 @@ import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 
-# Inject AFTER the last #include line to ensure types are defined
 last_inc = max((m.end() for m in re.finditer(r"#include[^\n]+\n", c)), default=0)
 if last_inc == 0:
     print("[WARN] No includes found in tu_autotune.cc")
     sys.exit(0)
 
 helper = """
-#ifdef __ANDROID__
-#include <sys/system_properties.h>
-#include <cstdlib>
-#include <cstring>
 static uint32_t tu_get_android_prop_u32(const char* prop, uint32_t def) {
     char val[PROP_VALUE_MAX] = {};
     return (__system_property_get(prop, val) > 0) ? (uint32_t)atoi(val) : def;
@@ -2429,25 +2148,18 @@ static bool tu_get_android_prop_bool(const char* prop, bool def) {
     char val[PROP_VALUE_MAX] = {};
     return (__system_property_get(prop, val) > 0) ? (strcmp(val, "1") == 0) : def;
 }
-#else
 static uint32_t tu_get_android_prop_u32(const char*, uint32_t def) { return def; }
 static bool tu_get_android_prop_bool(const char*, bool def) { return def; }
-#endif
 """
 
 if "tu_get_android_prop_u32" not in c:
     c = c[:last_inc] + helper + c[last_inc:]
 
-# Inject dynamic bypass check into tu_autotune_use_bypass
 injection = """
-   /* Android prop bypass: setprop debug.tu.sysmem 1 */
    if (tu_get_android_prop_bool("debug.tu.sysmem", false)) return true;
-   /* Android prop draw limit: setprop debug.tu.draw_limit 200 */
-   uint32_t draw_limit = tu_get_android_prop_u32("debug.tu.draw_limit", 0);
-   if (draw_limit > 0 && ac->total_draw_count > draw_limit) return true;
 """
 
-m = re.search(r"(tu_autotune_use_bypass[^{]*\{)", c)
+m = re.search(r"(?:static\s+)?bool\s+tu_autotune_use_bypass\s*\([^)]*\)\s*\{", c)
 if m:
     ins = c.find("{", m.start()) + 1
     eol = c.find("\n", ins)
@@ -2460,7 +2172,7 @@ if m:
         print("[OK] Android prop helpers added (bypass already patched)")
 else:
     with open(fp, "w") as f: f.write(c)
-    print("[WARN] tu_autotune_use_bypass not found — helpers added only")
+    print("[WARN] tu_autotune_use_bypass not found")
 PYEOF
     log_success "Android property-based dynamic control applied"
 }
@@ -2477,9 +2189,6 @@ with open(fp) as f: c = f.read()
 if "VSYNC_BYPASS_APPLIED" in c:
     print("[OK] VSync bypass already applied"); sys.exit(0)
 
-# In Winlator: Wine -> vkd3d -> Vulkan -> Android compositor
-# IMMEDIATE mode skips waiting for Android vsync signal
-# reducing the "double vsync penalty" and improving frame delivery
 c = re.sub(r"(\.EXT_swapchain_maintenance1\s*=\s*)false", r"\1true", c)
 c = re.sub(r"(\.KHR_present_id\s*=\s*)false", r"\1true", c)
 c += "\n/* VSYNC_BYPASS_APPLIED */\n"
@@ -2489,10 +2198,6 @@ PYEOF
     log_success "VSync bypass applied"
 }
 
-# ── A750 TASK 1: F32 → F16 Force Demotion ──────────────────────────────────
-# Patches ir3_nir.c to enable mediump lowering for Adreno 750.
-# Reduces ALU register pressure, fixes "invisible body" precision overflows.
-# Guard: only activates when ENABLE_A750_F16_DEMOTE=true.
 apply_a750_f16_demotion() {
     log_info "A750: Applying F32→F16 force demotion patch"
     local ir3_nir="${MESA_DIR}/src/freedreno/ir3/ir3_nir.c"
@@ -2515,48 +2220,30 @@ n = 0
 
 with open(fp_nir) as f: c = f.read()
 
-# ── 1. Enable lower_mediump pass for a750 (chip >= A7XX) ──────────────────
-# In Mesa, ir3_nir_lower_mediump() demotes mediump vars to half registers.
-# We force-enable it unconditionally for a7xx by patching the chip-id guard.
-# Pattern: if (compiler->options.lower_mediump ... chip < A7XX)
 for pat, repl in [
-    # Remove chip-generation guard that restricts mediump lowering to older GPUs
     (r'(lower_mediump\s*=\s*)false',
      r'\1true /* A750_F16_DEMOTE_APPLIED */'),
-    # If the guard is inside an if-block, flip the condition
     (r'(if\s*\([^)]*chip\s*<\s*[56]\s*[^)]*\)[^{]*\{[^}]*lower_mediump)',
      r'/* A750_F16_DEMOTE: removed chip guard */ if (true) { lower_mediump'),
 ]:
     c, k = re.subn(pat, repl, c, count=1)
     n += k
 
-# ── 2. Force half_precision flag on all fragment/vertex shaders ───────────
-# ir3 uses .half register allocation when half_precision is set.
 pat_half = r'(options\.half_precision_derivatives\s*=\s*)false'
 c, k = re.subn(pat_half, r'\1true /* A750_F16_DEMOTE */', c, count=1)
 n += k
 
-# ── 3. Enable lower_mediump in ir3_compiler options (Mesa 26.1 API) ──────
-# In Mesa 26.1 the correct way is to set the compiler option flag,
-# NOT to inject NIR_PASS_V calls (nir_lower_mediump_outputs was removed).
-# The ir3 backend reads this flag and calls the pass internally.
 for pat, repl in [
     (r'(options\.lower_mediump\s*=\s*)false',
      r'\g<1>true /* A750_F16_DEMOTE: mediump lowering enabled */'),
-    # Also flip the per-shader lower_mediump_ops flag if present
     (r'(lower_mediump_ops\s*=\s*)false',
      r'\g<1>true /* A750_F16_DEMOTE */'),
-    # Force half-precision for texture coords (reduces sampler register usage)
     (r'(lower_mediump_samplers\s*=\s*)false',
      r'\g<1>true /* A750_F16_DEMOTE */'),
 ]:
     c, k = re.subn(pat, repl, c, count=1)
     n += k
 
-# ── 4. Depth output safety — use Mesa 26.1 compatible approach ────────────
-# In Mesa 26.1 we cannot inject nir_foreach_shader_out_variable without
-# including the right headers. Instead, set the "no_mediump_on_frag_depth"
-# compiler option if it exists (safe no-op if not present).
 pat_depth_safe = r'(no_mediump_on_frag_depth\s*=\s*)false'
 c, k = re.subn(pat_depth_safe,
                r'\g<1>true /* A750_F16_DEMOTE: protect frag depth */',
@@ -2566,15 +2253,12 @@ n += k
 with open(fp_nir, 'w') as f: f.write(c)
 print(f"[OK] A750 F16 demotion: {n} changes in ir3_nir.c")
 
-# ── 5. Patch ir3_compiler.c: disable strict IEEE754 for half regs ─────────
 if fp_comp and os.path.exists(fp_comp):
     with open(fp_comp) as f: c2 = f.read()
     c2_n = 0
-    # lower_fp16 flag allows IR3 RA to use .h half-register slots aggressively
     pat_fp16 = r'(compiler->options\.lower_fp16\s*=\s*)false'
     c2, k = re.subn(pat_fp16, r'\1true /* A750_F16_DEMOTE */', c2, count=1)
     c2_n += k
-    # Disable strict NaN/Inf IEEE754 — allows ffast-math equivalent in IR3
     pat_nan = r'(compiler->options\.fmul_zero_to_zero\s*=\s*)false'
     c2, k = re.subn(pat_nan, r'\1true /* A750_F16_DEMOTE */', c2, count=1)
     c2_n += k
@@ -2587,10 +2271,6 @@ PYEOF
 }
 
 
-# ── A750 TASK 2: Depth Bias Force-Inject ───────────────────────────────────
-# Patches tu_pipeline.cc to inject a constant depth bias offset for Qualcomm.
-# Pushes geometry forward in the Z-buffer to fix missing buildings/landscapes.
-# Values: constant=2.5f (tuneable), clamp=0.0025f (prevents sky erasure).
 apply_a750_depth_bias() {
     log_info "A750: Applying depth bias clamp override (const=${A750_DEPTH_BIAS_CONSTANT}, clamp=${A750_DEPTH_BIAS_CLAMP})"
     local tu_pipeline="${MESA_DIR}/src/freedreno/vulkan/tu_pipeline.cc"
@@ -2617,9 +2297,6 @@ n = 0
 
 with open(fp_pipe) as f: c = f.read()
 
-# ── 1. Force depthBiasEnable = VK_TRUE in rasterization state ─────────────
-# Mesa sets this from pipeline create info. We override it unconditionally
-# for Qualcomm to prevent tile-based Z-precision loss at >50m distance.
 bias_inject = f"""
    /* A750_DEPTH_BIAS_APPLIED: force Qualcomm depth bias workaround */
    rs_info->depthBiasEnable         = VK_TRUE;
@@ -2628,7 +2305,6 @@ bias_inject = f"""
    rs_info->depthBiasClamp          = {bias_clamp}f;
 """
 
-# Find tu_pipeline_builder_parse_rasterization or similar RS state handler
 for pat in [
     r'(tu_pipeline_builder_parse_rasterization[^{]*\{)',
     r'(tu_pipeline_set_rasterization_state[^{]*\{)',
@@ -2636,17 +2312,12 @@ for pat in [
 ]:
     m = re.search(pat, c, re.DOTALL)
     if m:
-        # Inject after the function opening brace
         ins = c.find('\n', m.end())
         if ins != -1 and "A750_DEPTH_BIAS_APPLIED" not in c:
             c = c[:ins+1] + bias_inject + c[ins+1:]
             n += 1
             break
 
-# ── 2. Collapse back-to-back depth barrier flushes ────────────────────────
-# Adreno 750 tile-scheduler stalls 2-4ms per frame on split depth barriers.
-# Coarsen VK_ACCESS_DEPTH_STENCIL_*_BIT into a single MEMORY access mask.
-# This is non-compliant but eliminates the micro-stutter on tile transitions.
 barrier_pat = re.compile(
     r'(srcAccessMask\s*[|]=?\s*)'
     r'(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT\s*\|\s*'
@@ -2663,9 +2334,6 @@ n += k
 with open(fp_pipe, 'w') as f: f.write(c)
 print(f"[OK] A750 depth bias + barrier coarsening: {n} changes in tu_pipeline.cc")
 
-# ── 3. Patch tu_device.cc: cache Qualcomm vendor detection ────────────────
-# Ensures the bias is only active on real Qualcomm hardware at runtime
-# by reading vendorID and gating the bias via an env-var if needed.
 QUALCOMM_VENDOR = "0x5143"
 if os.path.exists(fp_dev):
     with open(fp_dev) as f: cd = f.read()
@@ -2688,18 +2356,12 @@ PYEOF
 }
 
 
-# ── A750 TASK 3: RelaxedPrecision Shader Stripper ──────────────────────────
-# Downgrades all highp precision qualifiers in GLSL source files and
-# patches NIR to inject RelaxedPrecision on float variables.
-# Goal: force every shader into mediump mode before IR3 compilation.
 apply_a750_relaxed_precision() {
     log_info "A750: Applying RelaxedPrecision shader stripper"
     local glsl_dir="${MESA_DIR}/src/freedreno"
     local ir3_nir="${MESA_DIR}/src/freedreno/ir3/ir3_nir.c"
     local count=0
 
-    # ── Step 1: GLSL source — strip highp → mediump ────────────────────────
-    # Find all .glsl, .frag, .vert, .comp files and downgrade precision.
     while IFS= read -r -d '' glsl_file; do
         if grep -q "highp\|precision high" "$glsl_file" 2>/dev/null; then
             python3 - "$glsl_file" << 'PYEOF'
@@ -2709,12 +2371,9 @@ with open(fp) as f: c = f.read()
 if "A750_RELAX_APPLIED" in c: sys.exit(0)
 orig = c
 
-# Global precision declarations: precision highp float; → mediump
 c = re.sub(r'\bprecision\s+highp\s+(float|int|sampler\w*)\s*;',
            r'precision mediump \1; /* A750_RELAX */', c)
-# Inline highp qualifiers → mediump
 c = re.sub(r'\bhighp\b', 'mediump /* A750_RELAX */', c)
-# double → float (Adreno has NO fp64 hardware path)
 c = re.sub(r'\bdouble\b', 'float /* A750_RELAX_F64 */', c)
 c = re.sub(r'\bdvec([234])\b', r'vec\1 /* A750_RELAX_F64 */', c)
 c = re.sub(r'\bdmat([234])\b', r'mat\1 /* A750_RELAX_F64 */', c)
@@ -2732,7 +2391,6 @@ PYEOF
            -o -name "*.tesc" -o -name "*.tese" \) \
         -print0 2>/dev/null)
 
-    # ── Step 2: NIR — inject RelaxedPrecision flag into compiler options ───
     if [[ -f "$ir3_nir" ]] && ! grep -q "A750_RELAXED_PREC_NIR" "$ir3_nir"; then
         python3 - "$ir3_nir" << 'PYEOF'
 import sys, re
@@ -2740,26 +2398,18 @@ fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n = 0
 
-# Mesa 26.1: nir_foreach_ssa_def was REMOVED (SSA is now always used).
-# Correct approach: flip compiler option flags via regex — no code injection.
-# These flags tell the ir3 backend to prefer .h (half-register) slots
-# during register allocation, achieving the same effect safely.
 
-# lower_mediump: core flag enabling mediump→half-reg lowering
 for pat, repl in [
     (r'(options\.lower_mediump\s*=\s*)false',
      r'\g<1>true /* A750_RELAXED_PREC_NIR */'),
-    # promote_mediump: promote mediump to half in the RA
     (r'(options\.promote_mediump\s*=\s*)false',
      r'\g<1>true /* A750_RELAXED_PREC_NIR */'),
-    # Force f16 ALU where safe (Mesa 26.1 flag name)
     (r'(options\.force_mediump_nir\s*=\s*)false',
      r'\g<1>true /* A750_RELAXED_PREC_NIR */'),
 ]:
     c, k = re.subn(pat, repl, c, count=1)
     n += k
 
-# Mark the file so we don't re-apply
 c += "\n/* A750_RELAXED_PREC_NIR */\n"
 
 with open(fp, 'w') as f: f.write(c)
@@ -2771,12 +2421,6 @@ PYEOF
 }
 
 
-# ── A750 TASK 4: Force Bindless Descriptors ────────────────────────────────
-# Overrides every update-after-bind descriptor limit to "unlimited" on A750.
-# Forces VKD3D into full bindless mode (what Adreno 830 does natively).
-# Fixes missing meshes/bodies in Mirage/Uncharted/Spider-Man where partial
-# descriptor indexing support causes geometry to silently vanish.
-# Hazard: occasional driver OOM crash if descriptor heap overflows real VRAM.
 apply_a750_force_bindless() {
     log_info "A750: Applying Force Bindless Descriptor hack"
     local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
@@ -2796,9 +2440,6 @@ fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n = 0
 
-# ── 1. Override update-after-bind descriptor limits ───────────────────────
-# Adreno 750 reports conservative limits — we blast them to near-unlimited
-# so VKD3D can allocate full D3D12-style heaps without hitting Vulkan caps.
 BINDLESS_LIMIT = "0x0FFFFFFFu"
 
 LIMIT_FIELDS = [
@@ -2810,7 +2451,6 @@ LIMIT_FIELDS = [
     "maxDescriptorSetUpdateAfterBindSampledImages",
     "maxDescriptorSetUpdateAfterBindStorageImages",
     "maxDescriptorSetUpdateAfterBindInputAttachments",
-    # Also the per-stage limits
     "maxPerStageDescriptorUpdateAfterBindSamplers",
     "maxPerStageDescriptorUpdateAfterBindUniformBuffers",
     "maxPerStageDescriptorUpdateAfterBindStorageBuffers",
@@ -2826,7 +2466,6 @@ for field in LIMIT_FIELDS:
                    c, count=1)
     n += k
 
-# ── 2. Force all update-after-bind feature flags to VK_TRUE ───────────────
 BINDLESS_FEATURES = [
     "descriptorBindingSampledImageUpdateAfterBind",
     "descriptorBindingStorageImageUpdateAfterBind",
@@ -2853,9 +2492,6 @@ for feat in BINDLESS_FEATURES:
                    c, count=1)
     n += k
 
-# ── 3. Inject force-bindless runtime helper into device init ──────────────
-# This helper is called once after physical device limits are queried.
-# Gated by TU_NO_BINDLESS_FORCE env-var so you can disable at runtime.
 BINDLESS_GUARD_CODE = """
 /* A750_FORCE_BINDLESS_APPLIED: runtime bindless descriptor override */
 static void
@@ -2878,13 +2514,11 @@ tu_a750_force_bindless_limits(struct tu_physical_device *pdev)
 }
 """
 
-# Inject the helper function before the first static function in the file
 first_static = re.search(r'\nstatic ', c)
 if first_static and "tu_a750_force_bindless_limits" not in c:
     c = c[:first_static.start()+1] + BINDLESS_GUARD_CODE + c[first_static.start()+1:]
     n += 1
 
-# Call it inside tu_physical_device_init (or equivalent)
 call_code = "\n   tu_a750_force_bindless_limits(pdevice); /* A750_FORCE_BINDLESS_APPLIED */\n"
 for init_fn in [r'tu_physical_device_init\s*\([^{]*\{',
                 r'tu_enumerate_physical_devices\s*\([^{]*\{']:
@@ -2903,13 +2537,6 @@ PYEOF
 }
 
 
-# ── A750 TASK 5: Zero-Latency Barrier No-Op ───────────────────────────────
-# Collapses ALL pipeline memory barriers into bottom-of-pipe no-ops.
-# Eliminates Adreno 750 tile-scheduler sync stalls that cause slow-motion
-# in Spider-Man 2 / Cyberpunk 2077 / Horizon Zero Dawn.
-# Hazard: race condition risk on depth/color attachment transitions.
-#         Will cause geometry corruption on ~5% of draw calls. Intentional.
-# Guard:  set TU_NO_BARRIER_NOOP=1 at runtime to re-enable real barriers.
 apply_a750_barrier_noop() {
     log_info "A750: Applying Zero-Latency Barrier No-Op hack"
     local tu_cmd="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
@@ -2930,19 +2557,15 @@ fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n = 0
 
-# ── 1. Inject runtime no-op guard helper ──────────────────────────────────
 NOOP_HELPER = """
 /* A750_BARRIER_NOOP_APPLIED: zero-latency barrier no-op for Adreno 750 */
 static inline bool
 tu_a750_barrier_noop_active(void)
 {
-#ifdef __ANDROID__
    char val[92] = {};
    return (__system_property_get("debug.tu.barrier_noop", val) > 0 &&
            val[0] == '1');
-#else
    return getenv("TU_BARRIER_NOOP") != NULL;
-#endif
 }
 """
 
@@ -2951,9 +2574,6 @@ if first_static and "tu_a750_barrier_noop_active" not in c:
     c = c[:first_static.start()+1] + NOOP_HELPER + c[first_static.start()+1:]
     n += 1
 
-# ── 2. Collapse srcStageMask / dstStageMask to BOTTOM_OF_PIPE ─────────────
-# Any barrier that uses heavy stage masks (ALL_COMMANDS, ALL_GRAPHICS,
-# FRAGMENT_SHADER etc.) gets reduced to the cheapest possible stage pair.
 STAGE_FIELDS = [
     r'(srcStageMask\s*=\s*)[^;,\n}]+',
     r'(dstStageMask\s*=\s*)[^;,\n}]+',
@@ -2963,9 +2583,6 @@ for pat in STAGE_FIELDS:
     c, k = re.subn(pat, rf'\g<1>{BOTTOM}', c)
     n += k
 
-# ── 3. Zero out all srcAccessMask / dstAccessMask in barriers ─────────────
-# Access masks control cache invalidation. Setting to 0 skips all flushes.
-# This is the primary source of the latency win on Adreno tile cache.
 ACCESS_FIELDS = [
     r'(srcAccessMask\s*=\s*)[^;,\n}]+',
     r'(dstAccessMask\s*=\s*)[^;,\n}]+',
@@ -2976,9 +2593,6 @@ for pat in ACCESS_FIELDS:
                    c)
     n += k
 
-# ── 4. Wrap tu_emit_cache_flush with the runtime guard ────────────────────
-# tu_emit_cache_flush is the final function that actually submits barrier
-# packets to the CP (command processor). We short-circuit it when active.
 FLUSH_GUARD = (
     "\n   /* A750_BARRIER_NOOP_APPLIED */\n"
     "   if (tu_a750_barrier_noop_active()) return;\n"
@@ -3000,13 +2614,6 @@ PYEOF
 }
 
 
-# ── A750 TASK 6: Engine-Name AMD Spoof ────────────────────────────────────
-# Intercepts VkDevice creation and spoofs vendorID/deviceID to AMD
-# ONLY when pEngineName contains "vkd3d" AND the Android prop
-# debug.tu.spoof_vkd3d=1 is set at runtime.
-# This forces VKD3D code paths that are AMD-optimised (better root constant
-# handling, wider descriptor heaps, no Qualcomm-specific workarounds).
-# Complements DECK_EMU (which spoofs at GetPhysicalDeviceProperties level).
 apply_a750_engine_spoof() {
     log_info "A750: Applying VKD3D engine-name AMD spoof"
     local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
@@ -3026,14 +2633,8 @@ fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n = 0
 
-# ── 1. Inject the spoof helper function ───────────────────────────────────
 SPOOF_FUNC = """
 /* A750_ENGINE_SPOOF_APPLIED: AMD vendor spoof for vkd3d engine sessions */
-#ifdef __ANDROID__
-#  ifndef _SYSTEM_PROPERTIES_H
-#    include <sys/system_properties.h>
-#  endif
-#endif
 static void
 tu_a750_apply_engine_spoof(struct tu_physical_device *pdev,
                             const VkApplicationInfo *app_info)
@@ -3041,14 +2642,11 @@ tu_a750_apply_engine_spoof(struct tu_physical_device *pdev,
    if (!app_info || !app_info->pEngineName) return;
    if (!strstr(app_info->pEngineName, "vkd3d")) return;
 
-#ifdef __ANDROID__
    char prop[PROP_VALUE_MAX] = {};
    if (__system_property_get("debug.tu.spoof_vkd3d", prop) <= 0 ||
        strcmp(prop, "1") != 0)
       return;
-#else
    if (!getenv("TU_SPOOF_VKD3D")) return;
-#endif
 
    /* Spoof as AMD Radeon RX 6600M (VanGogh class — same as Steam Deck) */
    pdev->props.vendorID      = 0x1002u;   /* AMD */
@@ -3059,22 +2657,16 @@ tu_a750_apply_engine_spoof(struct tu_physical_device *pdev,
            VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1);
    pdev->props.deviceName[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1] = '\\0';
 
-#ifdef __ANDROID__
    __android_log_print(ANDROID_LOG_INFO, "turnip",
       "A750_ENGINE_SPOOF: AMD VanGogh spoof active for vkd3d session");
-#endif
 }
 """
 
-# Insert before first static/VkResult function
 first_fn = re.search(r'\n(static |VkResult |VKAPI_ATTR )', c)
 if first_fn and "tu_a750_apply_engine_spoof" not in c:
     c = c[:first_fn.start()+1] + SPOOF_FUNC + c[first_fn.start()+1:]
     n += 1
 
-# ── 2. Call the spoof inside tu_CreateDevice ──────────────────────────────
-# We hook right after tu_physical_device is resolved from the handle,
-# before any VK_SUCCESS return from the device creation path.
 SPOOF_CALL = (
     "\n   /* A750_ENGINE_SPOOF_APPLIED */\n"
     "   if (pCreateInfo && pCreateInfo->pApplicationInfo)\n"
@@ -3082,7 +2674,6 @@ SPOOF_CALL = (
     "                                 pCreateInfo->pApplicationInfo);\n"
 )
 
-# Find tu_CreateDevice function body
 for fn_pat in [r'(tu_CreateDevice\s*\([^{]*\{)',
                r'(VKAPI_CALL\s+tu_CreateDevice[^{]*\{)']:
     m = re.search(fn_pat, c)
@@ -3093,10 +2684,6 @@ for fn_pat in [r'(tu_CreateDevice\s*\([^{]*\{)',
             n += 1
         break
 
-# ── 3. Also hook tu_GetPhysicalDeviceProperties2 for consistency ──────────
-# DECK_EMU patches the properties at GetPhysicalDeviceProperties level.
-# We do the same here for the engine-name path, so both vkd3d detection
-# routes produce consistent vendor IDs.
 PROPS_HOOK = (
     "\n   /* A750_ENGINE_SPOOF_APPLIED: re-apply spoof on properties query */\n"
     "   /* (ensures vkd3d sees AMD vendor on every capability check) */\n"
@@ -3120,17 +2707,14 @@ PYEOF
 apply_patches() {
     log_info "Applying patches"
     cd "$MESA_DIR"
-    [[ "$BUILD_VARIANT" == "vanilla" ]] && { log_info "Vanilla - skipping patches"; return 0; }
+    [[ "$BUILD_VARIANT" == "normal" ]] && { log_info "Normal build - skipping patches"; return 0; }
 
     if [[ "$APPLY_PATCH_SERIES" == "true" ]]; then
         [[ -f "$PATCHES_DIR/series" ]] && apply_patch_series "$PATCHES_DIR"
-        [[ -d "$PATCHES_DIR/a8xx" && -f "$PATCHES_DIR/a8xx/series" ]] && apply_patch_series "$PATCHES_DIR/a8xx"
     fi
 
     if [[ "$ENABLE_TIMELINE_HACK" == "true" ]]; then apply_timeline_semaphore_fix; fi
     apply_gralloc_ubwc_fix
-    apply_a8xx_patches
-    apply_sysmem_mode_fix
     if [[ "$ENABLE_A7XX_COMPAT" == "true" ]]; then apply_a7xx_series_compat; fi
     [[ "${ENABLE_PRESENT_WAIT_FIX:-true}" == "true" ]] && apply_present_wait_fix
     [[ "${ENABLE_VIEWPORT_CLAMP:-true}" == "true" ]] && apply_viewport_clamp_fix
@@ -3147,7 +2731,6 @@ apply_patches() {
     if [[ "$ENABLE_CUSTOM_FLAGS" == "true" ]]; then apply_custom_debug_flags; fi
     if [[ "$ENABLE_DECK_EMU" == "true" ]]; then apply_deck_emu_support; fi
     if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then apply_vulkan_extensions_support; fi
-    # ── A750 Depth/Precision Hacks ─────────────────────────────────────────
     if [[ "$ENABLE_A750_F16_DEMOTE" == "true" ]]; then apply_a750_f16_demotion; fi
     if [[ "$ENABLE_A750_DEPTH_BIAS" == "true" ]]; then apply_a750_depth_bias; fi
     if [[ "$ENABLE_A750_RELAXED_PRECISION" == "true" ]]; then apply_a750_relaxed_precision; fi
@@ -3218,7 +2801,7 @@ EOF
 }
 
 configure_build() {
-    log_info "Configuring Mesa build (unified a7xx + a8xx)"
+    log_info "Configuring Mesa build (a7xx)"
     cd "$MESA_DIR"
     local buildtype="$BUILD_TYPE"
     [[ "$BUILD_VARIANT" == "debug"   ]] && buildtype="debug"
@@ -3328,14 +2911,14 @@ print_summary() {
     echo "  Build Date     : $build_date"
     echo "  Driver Name    : vulkan.ad00xx.so"
     echo "  Build Variant  : $BUILD_VARIANT"
-    echo "  GPU Support    : a7xx (725/730/735/740/750) + a8xx (810/825/829/830/840)"
+    echo "  GPU Support    : a7xx (725/730/735/740/750)"
     echo "  Output         :"
     ls -lh "${WORKDIR}"/*.zip 2>/dev/null | awk '{print "    " $9 " (" $5 ")"}'
     echo ""
 }
 
 main() {
-    log_info "Turnip Unified Driver Builder (a7xx + a8xx)"
+    log_info "Turnip Driver Builder (a7xx)"
     check_deps
     prepare_workdir
     clone_mesa
