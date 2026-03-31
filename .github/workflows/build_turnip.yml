@@ -12,7 +12,6 @@ on:
           - main_branch
           - latest_main
           - robclark_branch
-          - autotuner
           - custom_tag
 
       staging_branch:
@@ -21,58 +20,14 @@ on:
         default: "staging/26.0"
         options:
           - staging/26.0
-          - staging/25.3
-
-      custom_tag:
-        description: "Custom Mesa tag"
-        required: false
-        default: ""
-
-      build_type:
-        type: choice
-        description: "Meson build type"
-        default: "release"
-        options:
-          - release
-          - debug
-          - debugoptimized
 
       build_variant:
         type: choice
         description: "Build variant"
-        default: "optimized"
+        default: "patched"
         options:
-          - optimized
-          - autotuner
-          - vanilla
-          - debug
-          - profile
-      target_gpu:
-        type: choice
-        description: "Target GPU"
-        default: "a0xx"
-        options:
-          - a0xx
-          - a7xx
-          - a8xx
-
-      ndk_version:
-        type: choice
-        description: "Android NDK version"
-        default: "android-ndk-r29"
-        options:
-          - android-ndk-r29
-          - android-ndk-r28
-          - android-ndk-r27
-
-      api_level:
-        type: choice
-        description: "Android API level"
-        default: "35"
-        options:
-          - "35"
-          - "34"
-          - "33"
+          - patched
+          - normal
 
       patch_preset:
         type: choice
@@ -176,24 +131,7 @@ on:
           - "1000"
           - "2000"
 
-      frame_control_preset:
-        type: choice
-        description: "Frame pacing control"
-        default: "winlator"
-        options:
-          - standard
-          - winlator
-          - aggressive
-          - disabled
 
-      log_level:
-        type: choice
-        description: "Log verbosity"
-        default: "info"
-        options:
-          - quiet
-          - info
-          - verbose
 
 permissions:
   contents: write
@@ -209,21 +147,30 @@ jobs:
       validated: ${{ steps.validate.outputs.ok }}
       mesa_ref: ${{ steps.resolve.outputs.ref }}
       patch_flags: ${{ steps.presets.outputs.patch_flags }}
-      frame_flags: ${{ steps.presets.outputs.frame_flags }}
       a750_flags: ${{ steps.presets.outputs.a750_flags }}
+      ndk_version: ${{ steps.validate.outputs.ndk_version }}
+      api_level: ${{ steps.validate.outputs.api_level }}
+      target_gpu: ${{ steps.validate.outputs.target_gpu }}
     steps:      
       - name: Validate inputs
         id: validate
         run: |
-          if [[ "${{ inputs.mesa_source }}" == "custom_tag" && -z "${{ inputs.custom_tag }}" ]]; then
-            echo "custom_tag is required when mesa_source=custom_tag"
-            exit 1
-          fi
           if [[ "${{ inputs.enable_a750_autotune }}" == "true" ]]; then
             if [[ ${{ inputs.a750_gmem_limit_mb }} -lt 3 || ${{ inputs.a750_gmem_limit_mb }} -gt 6 ]]; then
               echo "GMEM limit must be between 3-6 MB"
               exit 1
             fi
+          fi
+          NDK_TAG=$(curl -sL "https://api.github.com/repos/android/ndk/releases/latest" \
+            | grep -oP '"tag_name":\s*"\Kr[0-9]+[a-z]?' | head -1 || true)
+          NDK_VER="${NDK_TAG:+android-ndk-${NDK_TAG}}"
+          NDK_VER="${NDK_VER:-android-ndk-r29}"
+          echo "ndk_version=$NDK_VER" >> $GITHUB_OUTPUT
+          echo "api_level=35" >> $GITHUB_OUTPUT
+          if [[ "${{ inputs.build_variant }}" == "patched" ]]; then
+            echo "target_gpu=a7xx" >> $GITHUB_OUTPUT
+          else
+            echo "target_gpu=a0xx" >> $GITHUB_OUTPUT
           fi
           echo "ok=true" >> $GITHUB_OUTPUT
 
@@ -234,8 +181,6 @@ jobs:
             staging_branch)   ref="${{ inputs.staging_branch }}" ;;
             main_branch|latest_main) ref="main" ;;
             robclark_branch)  ref="robclark/main" ;;
-            autotuner)        ref="autotuner" ;;
-            custom_tag)       ref="${{ inputs.custom_tag }}" ;;
             *)                ref="main" ;;
           esac
           echo "ref=$ref" >> $GITHUB_OUTPUT
@@ -258,16 +203,6 @@ jobs:
               ;;
           esac
 
-          case "${{ inputs.frame_control_preset }}" in
-            standard)
-              echo "frame_flags=ENABLE_PRESENT_WAIT_FIX=true ENABLE_FRAME_PACING=true ENABLE_VSYNC_BYPASS=false ENABLE_ANDROID_PROP_CONTROL=true" >> $GITHUB_OUTPUT
-              ;;            winlator|aggressive)
-              echo "frame_flags=ENABLE_PRESENT_WAIT_FIX=true ENABLE_FRAME_PACING=true ENABLE_VSYNC_BYPASS=true ENABLE_ANDROID_PROP_CONTROL=true" >> $GITHUB_OUTPUT
-              ;;
-            disabled)
-              echo "frame_flags=ENABLE_PRESENT_WAIT_FIX=false ENABLE_FRAME_PACING=false ENABLE_VSYNC_BYPASS=false ENABLE_ANDROID_PROP_CONTROL=false" >> $GITHUB_OUTPUT
-              ;;
-          esac
           # ── A750 hack preset expansion ──────────────────────────────────────
           case "${{ inputs.a750_hack_preset }}" in
             none)
@@ -297,14 +232,13 @@ jobs:
     env:
       MESA_SOURCE: ${{ inputs.mesa_source }}
       STAGING_BRANCH: ${{ inputs.staging_branch }}
-      CUSTOM_TAG: ${{ inputs.custom_tag }}
       MESA_LOCAL_PATH: ""
-      BUILD_TYPE: ${{ inputs.build_type }}
+      BUILD_TYPE: release
       BUILD_VARIANT: ${{ inputs.build_variant }}
-      TARGET_GPU: ${{ inputs.target_gpu }}
+      TARGET_GPU: ${{ needs.pre-check.outputs.target_gpu }}
       NDK_PATH: ${{ github.workspace }}/android-ndk
-      NDK_VERSION: ${{ inputs.ndk_version }}
-      API_LEVEL: ${{ inputs.api_level }}
+      NDK_VERSION: ${{ needs.pre-check.outputs.ndk_version }}
+      API_LEVEL: ${{ needs.pre-check.outputs.api_level }}
       ENABLE_DECK_EMU: ${{ inputs.enable_deck_emu }}
       DECK_EMU_TARGET: ${{ inputs.deck_emu_target }}
       ENABLE_PERF: ${{ inputs.enable_perf }}
@@ -318,11 +252,10 @@ jobs:
       ENABLE_A750_AUTOTUNE: ${{ inputs.enable_a750_autotune }}
       A750_GMEM_LIMIT_MB: ${{ inputs.a750_gmem_limit_mb }}
       A750_DRAWCALL_THRESHOLD: ${{ inputs.a750_drawcall_threshold }}
-      LOG_LEVEL: ${{ inputs.log_level }}
-      TU_FORCE_IMMEDIATE_PRESENT: ${{ inputs.frame_control_preset != 'disabled' && '1' || '0' }}
+      TU_FORCE_IMMEDIATE_PRESENT: 1
       PATCH_PRESET: ${{ inputs.patch_preset }}
-      FRAME_CONTROL_PRESET: ${{ inputs.frame_control_preset }}${{ needs.pre-check.outputs.patch_flags }}${{ needs.pre-check.outputs.frame_flags }}${{ needs.pre-check.outputs.a750_flags }}
-      # ── A750 Hacks — expanded from a750_hack_preset via pre-check ────────
+      FRAME_CONTROL_PRESET: emulator${{ needs.pre-check.outputs.patch_flags }}${{ needs.pre-check.outputs.a750_flags }}
+      # ── A750 Hacks — expanded from a750_hack_preset via pre-check
       A750_HACK_PRESET: ${{ inputs.a750_hack_preset }}
       CFLAGS_EXTRA: >-
         ${{ inputs.enable_perf == true
@@ -374,17 +307,17 @@ jobs:
         run: |
           curl -sL "https://dl.google.com/android/repository/${{ env.NDK_VERSION }}-linux.zip" -o ndk.zip
           unzip -q ndk.zip
-          mv "${{ env.NDK_VERSION }}" "${{ env.NDK_PATH }}"
+          mv "${{ env.NDK_VERSION }}" "${{ env.NDK_PATH }}" 2>/dev/null || mv android-ndk-r* "${{ env.NDK_PATH }}"
           rm ndk.zip
 
       - name: Cache ccache
         uses: actions/cache@v4
         with:          
           path: ~/.cache/ccache
-          key: ccache-${{ inputs.target_gpu }}-${{ inputs.build_variant }}-${{ needs.pre-check.outputs.mesa_ref }}-${{ env.CACHE_VERSION }}
+          key: ccache-${{ needs.pre-check.outputs.target_gpu }}-${{ inputs.build_variant }}-${{ needs.pre-check.outputs.mesa_ref }}-${{ env.CACHE_VERSION }}
           restore-keys: |
-            ccache-${{ inputs.target_gpu }}-${{ inputs.build_variant }}-
-            ccache-${{ inputs.target_gpu }}-
+            ccache-${{ needs.pre-check.outputs.target_gpu }}-${{ inputs.build_variant }}-
+            ccache-${{ needs.pre-check.outputs.target_gpu }}-
 
       - name: Cache Meson subproject downloads
         uses: actions/cache@v4
@@ -453,15 +386,14 @@ jobs:
             | Commit | `${{ steps.build.outputs.commit }}` |
             | Vulkan API | `${{ steps.build.outputs.vulkan }}` |
             | Driver File | `vulkan.ad00xx.so` |
-            | GPU Support | a7xx (725/730/735/740/750) + a8xx (810/825/829/830/840) |
-            | Build Type | `${{ inputs.build_type }}` |
+            | GPU Support | a7xx (725/730/735/740/750) |
+            | Build Type | `release` |
             | Variant | `${{ inputs.build_variant }}` |
             | Mesa Source | `${{ inputs.mesa_source }}` |
-            | NDK | `${{ inputs.ndk_version }}` |
-            | API Level | `${{ inputs.api_level }}` |
+            | NDK | `${{ needs.pre-check.outputs.ndk_version }}` |
+            | API Level | `${{ needs.pre-check.outputs.api_level }}` |
             | Build Date | `${{ steps.build.outputs.build_date }}` |
             | Patch Preset | `${{ inputs.patch_preset }}` |
-            | Frame Control | `${{ inputs.frame_control_preset }}` |
 
             ### TU_DEBUG (Winlator EnvVars)
 
@@ -487,7 +419,6 @@ jobs:
             ${{ inputs.enable_shader_perf == true && '- Shader Compiler Optimizations' || '' }}
             ${{ inputs.enable_a750_autotune == true && '- A750 Dynamic Autotune' || '' }}
             - Patch Preset: `${{ inputs.patch_preset }}`
-            - Frame Control: `${{ inputs.frame_control_preset }}`
             ${{ inputs.a750_hack_preset != 'none' && format('- 🔥 A750 Hacks: {0}', inputs.a750_hack_preset) || '' }}
 
             ### Dynamic Control via ADB
@@ -499,7 +430,7 @@ jobs:
             Compiled from Mesa freedreno
           files: build/*.zip
           draft: ${{ inputs.release_as_draft }}
-          prerelease: ${{ inputs.build_variant == 'debug' || inputs.build_variant == 'profile' }}
+          prerelease: false
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -511,9 +442,8 @@ jobs:
           echo "Mesa Source: ${{ inputs.mesa_source }}"
           echo "Mesa Ref: ${{ needs.pre-check.outputs.mesa_ref }}"
           echo "Build Variant: ${{ inputs.build_variant }}"
-          echo "NDK: ${{ inputs.ndk_version }} (API ${{ inputs.api_level }})"
+          echo "NDK: ${{ needs.pre-check.outputs.ndk_version }} (API ${{ needs.pre-check.outputs.api_level }})"
           echo "Patch Preset: ${{ inputs.patch_preset }}"
-          echo "Frame Control: ${{ inputs.frame_control_preset }}"
           echo "Driver: vulkan.ad00xx.so"
           if [[ -f "build/version.txt" ]]; then
             echo "Version: $(cat build/version.txt)"
