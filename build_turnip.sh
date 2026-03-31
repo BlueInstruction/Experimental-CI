@@ -2540,8 +2540,8 @@ n += k
 # Some Mesa versions only call nir_lower_mediump when the driver requests it.
 inject_call = (
     "\n   /* A750_F16_DEMOTE: force mediump lowering for a750 half-reg RA */\n"
-    "   NIR_PASS_V(nir, nir_lower_mediump_vars, nir_var_function_temp);\n"
-    "   NIR_PASS_V(nir, nir_lower_mediump_outputs);\n"
+    "   NIR_PASS_V(s, nir_lower_mediump_vars, nir_var_function_temp);\n"
+    "   NIR_PASS_V(s, nir_lower_mediump_outputs);\n"
 )
 # Find the NIR optimization loop in ir3_nir_post_opts or ir3_optimize_loop
 m_opt = re.search(r'(ir3_optimize_loop|ir3_nir_post_opts)[^{]*\{', c)
@@ -2556,7 +2556,7 @@ if m_opt and "nir_lower_mediump_outputs" not in c:
 # the mediump lowering pass. This prevents black-screen from depth truncation.
 protect_depth = (
     "\n   /* A750_F16_DEMOTE: protect gl_FragDepth from mediump demotion */\n"
-    "   nir_foreach_shader_out_variable(var, nir) {\n"
+    "   nir_foreach_shader_out_variable(var, s) {\n"
     "      if (var->data.location == FRAG_RESULT_DEPTH ||\n"
     "          var->data.location == FRAG_RESULT_STENCIL)\n"
     "         var->data.precision = GLSL_PRECISION_HIGH;\n"
@@ -2749,7 +2749,7 @@ n = 0
 # This makes the IR3 register allocator prefer .h half-register slots
 inject = (
     "\n   /* A750_RELAXED_PREC_NIR: force RelaxedPrecision on all vars */\n"
-    "   nir_foreach_function_impl(impl, nir) {\n"
+    "   nir_foreach_function_impl(impl, s) {\n"
     "      nir_foreach_ssa_def(impl, def, {\n"
     "         if (def->bit_size == 32 &&\n"
     "             nir_alu_type_get_base_type(def->parent_instr->type) == nir_type_float)\n"
