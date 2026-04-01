@@ -478,7 +478,6 @@ INJECT = """
    ext->EXT_image_robustness = true;
    ext->EXT_image_view_min_lod = true;
    ext->EXT_index_type_uint8 = true;
-   ext->EXT_layer_settings = true;
    ext->EXT_legacy_dithering = true;
    ext->EXT_line_rasterization = true;
    ext->EXT_load_store_op_none = true;
@@ -928,36 +927,102 @@ PYEOF
 
 apply_deck_emu_support() {
     log_info "Applying Steam Deck GPU emulation (spoof as: $DECK_EMU_TARGET)"
-    local tu_device="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
-    [[ ! -f "$tu_device" ]] && { log_warn "tu_device.cc not found"; return 0; }
-    if grep -q "DECK_EMU_APPLIED" "$tu_device"; then return 0; fi
-
-    python3 - "$tu_device" << 'PYEOF'
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found, skipping deck emu"; return 0; }
+    if grep -q "DECK_EMU" "$tu_device_cc"; then
+        log_info "Deck emu already applied"
+        return 0
+    fi
+    local vendor_id device_id driver_version device_name
+    case "$DECK_EMU_TARGET" in
+        nvidia)
+            vendor_id="0x10de"; device_id="0x2684"
+            driver_version="0x61d0000"
+            device_name="NVIDIA GeForce RTX 4090"
+            ;;
+        amd)
+            vendor_id="0x1002"; device_id="0x1435"
+            driver_version="0x8000000"
+            device_name="AMD Custom GPU 0405 (RADV VANGOGH)"
+            ;;
+        *)
+            vendor_id="0x10de"; device_id="0x2684"
+            driver_version="0x61d0000"
+            device_name="NVIDIA GeForce RTX 4090"
+            ;;
+    esac
+    python3 - "$tu_device_cc" "$vendor_id" "$device_id" "$driver_version" "$device_name" << 'PYEOF'
 import sys, re
-fp = sys.argv[1]
+fp, vendor_id, device_id, driver_version, device_name = sys.argv[1:6]
 with open(fp) as f: c = f.read()
 
-# Fix missing includes
-if '#include <fcntl.h>' not in c:
-    c = '#include <fcntl.h>\n' + c
-if '#include <sys/system_properties.h>' not in c:
-    c = '#include <sys/system_properties.h>\n' + c
-
-spoof = """
-   /* DECK_EMU_APPLIED */
-   if (getenv("TU_DECK_EMU")) {
-      pdev->vk.properties.vendorID      = VENDOR_ID;
-      pdev->vk.properties.deviceID      = DEVICE_ID;
-      pdev->vk.properties.driverVersion = DRIVER_VERSION;
-      snprintf(pdev->vk.properties.deviceName, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE, "%s", DEVICE_NAME);
+turbo_init = """
+/* DECK_EMU_PERF_INIT */
+static void
+tu_deck_perf_init(void)
+{
+   static const char * const pwrlevel_paths[] = {
+      "/sys/class/kgsl/kgsl-3d0/min_pwrlevel",
+      "/sys/class/devfreq/kgsl-3d0/min_freq",
+      NULL,
+   };
+   static const char * const governor_paths[] = {
+      "/sys/class/kgsl/kgsl-3d0/devfreq/governor",
+      "/sys/class/devfreq/kgsl-3d0/governor",
+      NULL,
+   };
+   for (int i = 0; pwrlevel_paths[i]; i++) {
+      int fd = open(pwrlevel_paths[i], O_WRONLY | O_CLOEXEC);
+      if (fd >= 0) { (void)write(fd, "0", 1); close(fd); break; }
    }
+   for (int i = 0; governor_paths[i]; i++) {
+      int fd = open(governor_paths[i], O_WRONLY | O_CLOEXEC);
+      if (fd >= 0) { (void)write(fd, "performance", 11); close(fd); break; }
+   }
+}
 """
-with open(fp, 'w') as f: f.write(c + "\n/* DECK_EMU_APPLIED */\n")
-print("[OK] Deck emulation applied")
+
+spoof_code = f"""
+   /* DECK_EMU */
+   if (getenv("TU_DECK_EMU")) {{
+      props->vendorID      = {vendor_id};
+      props->deviceID      = {device_id};
+      props->driverVersion = {driver_version};
+      snprintf(props->deviceName, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE, "{device_name}");
+   }}
+"""
+
+perf_call = """
+   /* DECK_EMU_PERF */
+   tu_deck_perf_init();
+"""
+
+m = re.search(r'(tu_GetPhysicalDeviceProperties2?\s*\([^{]*\{)', c)
+if not m:
+    m = re.search(r'(vkGetPhysicalDeviceProperties2?\s*\([^{]*\{)', c)
+if m:
+    c = c[:m.end()] + spoof_code + c[m.end():]
+    print(f'[OK] Deck emu ({device_name}) applied')
+else:
+    print('[WARN] Properties function not found for deck emu')
+
+if 'DECK_EMU_PERF_INIT' not in c:
+    inc = c.find('#include')
+    if inc != -1:
+        eol = c.find('\n', inc)
+        c = c[:eol+1] + turbo_init + c[eol+1:]
+    init_m = re.search(r'(tu_physical_device_init\s*\([^)]*\)\s*\{)', c)
+    if not init_m:
+        init_m = re.search(r'(tu_CreateDevice\s*\([^)]*\)\s*\{)', c)
+    if init_m:
+        ins = c.find('\n', c.find('{', init_m.start())) + 1
+        c = c[:ins] + perf_call + c[ins:]
+        print('[OK] Deck perf init injected into device creation')
+with open(fp, 'w') as f: f.write(c)
+
 PYEOF
     log_success "Deck emulation applied ($DECK_EMU_TARGET)"
 }
-
 
 apply_custom_debug_flags() {
     log_info "Adding custom TU_DEBUG flags"
@@ -2437,7 +2502,7 @@ tu_a750_force_bindless_limits(struct tu_physical_device *pdev)
    (void)dt;
    /* limits already patched at source level — this is a belt-and-suspenders
     * runtime override in case Mesa's reported limits still cap us */
-   VkPhysicalDeviceLimits *lim = &pdev->props.limits;
+   VkPhysicalDeviceLimits *lim = &pdev->vk.properties.limits;
    lim->maxBoundDescriptorSets                        = 8;
    lim->maxDescriptorSetSamplers                      = 0x0FFFFFFFu;
    lim->maxDescriptorSetUniformBuffers                = 0x0FFFFFFFu;
@@ -2473,7 +2538,12 @@ PYEOF
 apply_a750_barrier_noop() {
     log_info "A750: Applying Zero-Latency Barrier No-Op hack"
     local tu_cmd="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
-    [[ ! -f "$tu_cmd" ]] && { log_warn "tu_cmd_buffer.cc not found"; return 0; }
+    [[ ! -f "$tu_cmd" ]] && tu_cmd="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.c"
+
+    if [[ ! -f "$tu_cmd" ]]; then
+        log_warn "A750 BarrierNoOp: tu_cmd_buffer not found, skipping"
+        return 0
+    fi
     if grep -q "A750_BARRIER_NOOP_APPLIED" "$tu_cmd"; then
         log_info "A750 BarrierNoOp: already applied"
         return 0
@@ -2483,32 +2553,61 @@ apply_a750_barrier_noop() {
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-
-# Fix missing include
-if '#include <sys/system_properties.h>' not in c:
-    inc = c.find('#include')
-    c = c[:inc] + '#include <sys/system_properties.h>\n' + c[inc:]
+n = 0
 
 NOOP_HELPER = """
-/* A750_BARRIER_NOOP_APPLIED */
-static inline bool tu_a750_barrier_noop_active(void) {
-    char val[92] = {};
-    return (__system_property_get("debug.tu.barrier_noop", val) > 0 && val[0] == '1') ||
-           getenv("TU_BARRIER_NOOP") != NULL;
+#include <sys/system_properties.h>
+static inline bool
+tu_a750_barrier_noop_active(void)
+{
+   char val[92] = {};
+   if (__system_property_get("debug.tu.barrier_noop", val) > 0)
+      return val[0] == '1';
+   return getenv("TU_BARRIER_NOOP") != NULL;
 }
+/* A750_BARRIER_NOOP_APPLIED */
 """
-if "tu_a750_barrier_noop_active" not in c:
-    c = c[:c.find('static ')] + NOOP_HELPER + c[c.find('static '):]
 
-# Downgrade strip (Z-fighting)
-c = re.sub(r'(srcStageMask\s*=\s*)[^;,\n}]+', r'\g<1>VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT', c)
-c = re.sub(r'(dstStageMask\s*=\s*)[^;,\n}]+', r'\g<1>VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT', c)
-c = re.sub(r'(srcAccessMask\s*=\s*)[^;,\n}]+', r'\g<1>0', c)
-c = re.sub(r'(dstAccessMask\s*=\s*)[^;,\n}]+', r'\g<1>0', c)
+first_static = re.search(r'\nstatic ', c)
+if first_static and "tu_a750_barrier_noop_active" not in c:
+    c = c[:first_static.start()+1] + NOOP_HELPER + c[first_static.start()+1:]
+    n += 1
 
-c += "\n/* A750_BARRIER_NOOP_APPLIED */\n"
+STAGE_FIELDS = [
+    r'(srcStageMask\s*=\s*)[^;,\n}]+',
+    r'(dstStageMask\s*=\s*)[^;,\n}]+',
+]
+BOTTOM = "VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT /* A750_BARRIER_NOOP_APPLIED */"
+for pat in STAGE_FIELDS:
+    c, k = re.subn(pat, rf'\g<1>{BOTTOM}', c)
+    n += k
+
+ACCESS_FIELDS = [
+    r'(srcAccessMask\s*=\s*)[^;,\n}]+',
+    r'(dstAccessMask\s*=\s*)[^;,\n}]+',
+]
+for pat in ACCESS_FIELDS:
+    c, k = re.subn(pat,
+                   r'\g<1>0 /* A750_BARRIER_NOOP_APPLIED: access mask zeroed */',
+                   c)
+    n += k
+
+FLUSH_GUARD = (
+    "\n   /* A750_BARRIER_NOOP_APPLIED */\n"
+    "   if (tu_a750_barrier_noop_active()) return;\n"
+)
+for fn_pat in [r'(tu_emit_cache_flush\s*\([^{]*\{)',
+               r'(tu_flush_all_pending_flushes\s*\([^{]*\{)']:
+    m = re.search(fn_pat, c)
+    if m:
+        ins = c.find('\n', c.find('{', m.start())) + 1
+        if "A750_BARRIER_NOOP_APPLIED" not in c[ins:ins+200]:
+            c = c[:ins] + FLUSH_GUARD + c[ins:]
+            n += 1
+        break
+
 with open(fp, 'w') as f: f.write(c)
-print("[OK] A750 Zero-Latency Barrier No-Op applied")
+print(f"[OK] A750 Zero-Latency Barrier No-Op: {n} changes in tu_cmd_buffer")
 PYEOF
     log_success "A750 Zero-Latency Barrier No-Op applied"
 }
@@ -2516,33 +2615,81 @@ PYEOF
 
 apply_a750_engine_spoof() {
     log_info "A750: Applying VKD3D engine-name AMD spoof"
-    local tu_device="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
-    [[ ! -f "$tu_device" ]] && { log_warn "tu_device.cc not found"; return 0; }
-    if grep -q "A750_ENGINE_SPOOF_APPLIED" "$tu_device"; then return 0; fi
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
 
-    python3 - "$tu_device" << 'PYEOF'
+    if [[ ! -f "$tu_device_cc" ]]; then
+        log_warn "A750 EngineSpoof: tu_device.cc not found, skipping"
+        return 0
+    fi
+    if grep -q "A750_ENGINE_SPOOF_APPLIED" "$tu_device_cc"; then
+        log_info "A750 EngineSpoof: already applied"
+        return 0
+    fi
+
+    python3 - "$tu_device_cc" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
+n = 0
 
-# Fix includes
-if '#include <android/log.h>' not in c:
-    c = '#include <android/log.h>\n' + c
-if '#include <sys/system_properties.h>' not in c:
-    c = '#include <sys/system_properties.h>\n' + c
+SPOOF_FUNC = """
+/* A750_ENGINE_SPOOF_APPLIED: AMD vendor spoof for vkd3d engine sessions */
+static void
+tu_a750_apply_engine_spoof(struct tu_physical_device *pdev)
+{
 
-spoof_func = """
-static void tu_a750_apply_engine_spoof(struct tu_physical_device *pdev, const VkDeviceCreateInfo *pCreateInfo) {
-   if (!pCreateInfo || !pCreateInfo->pApplicationInfo || !pCreateInfo->pApplicationInfo->pEngineName) return;
-   if (!strstr(pCreateInfo->pApplicationInfo->pEngineName, "vkd3d")) return;
-   if (getenv("TU_SPOOF_VKD3D") == NULL) return;
-   pdev->vk.properties.vendorID = 0x1002u;
-   pdev->vk.properties.deviceID = 0x163Fu;
-   __android_log_print(ANDROID_LOG_INFO, "turnip", "A750_ENGINE_SPOOF: AMD VanGogh active");
+   char prop[92] = {};
+   if (__system_property_get("debug.tu.spoof_vkd3d", prop) <= 0 ||
+       strcmp(prop, "1") != 0)
+      return;
+   if (!getenv("TU_SPOOF_VKD3D")) return;
+
+   /* Spoof as AMD Radeon RX 6600M (VanGogh class — same as Steam Deck) */
+   pdev->vk.properties.vendorID      = 0x1002u;   /* AMD */
+   pdev->vk.properties.deviceID      = 0x163Fu;   /* Radeon RX 6600M / VanGogh */
+   pdev->vk.properties.driverVersion = 0x8000000u;
+   strncpy(pdev->vk.properties.deviceName,
+           "AMD Radeon Graphics (RADV VANGOGH)",
+           VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1);
+   pdev->vk.properties.deviceName[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1] = '\\0';
+
 }
 """
-with open(fp, 'w') as f: f.write(c + "\n/* A750_ENGINE_SPOOF_APPLIED */\n")
-print("[OK] A750 Engine Spoof applied")
+
+first_fn = re.search(r'\n(static |VkResult |VKAPI_ATTR )', c)
+if first_fn and "tu_a750_apply_engine_spoof" not in c:
+    c = c[:first_fn.start()+1] + SPOOF_FUNC + c[first_fn.start()+1:]
+    n += 1
+
+SPOOF_CALL = (
+    "\n   tu_a750_apply_engine_spoof(pdevice); /* A750_ENGINE_SPOOF_APPLIED */\n"
+)
+
+for fn_pat in [r'(tu_physical_device_init\s*\([^{]*\{)',
+               r'(tu_enumerate_physical_devices\s*\([^{]*\{)']:
+    m = re.search(fn_pat, c)
+    if m:
+        ins = c.find('\n', c.find('{', m.start())) + 1
+        if "A750_ENGINE_SPOOF_APPLIED" not in c[ins:ins+500]:
+            c = c[:ins] + SPOOF_CALL + c[ins:]
+            n += 1
+        break
+
+PROPS_HOOK = (
+    "\n   /* A750_ENGINE_SPOOF_APPLIED: re-apply spoof on properties query */\n"
+    "   /* (ensures vkd3d sees AMD vendor on every capability check) */\n"
+)
+for props_fn in [r'(tu_GetPhysicalDeviceProperties2?\s*\([^{]*\{)',
+                 r'(VKAPI_CALL\s+tu_GetPhysicalDeviceProperties[^{]*\{)']:
+    m = re.search(props_fn, c)
+    if m and "A750_ENGINE_SPOOF_APPLIED" not in c[m.start():m.start()+800]:
+        ins = c.find('\n', c.find('{', m.start())) + 1
+        c = c[:ins] + PROPS_HOOK + c[ins:]
+        n += 1
+        break
+
+with open(fp, 'w') as f: f.write(c)
+print(f"[OK] A750 Engine-Name AMD Spoof: {n} changes in tu_device.cc")
 PYEOF
     log_success "A750 VKD3D engine-name AMD spoof applied"
 }
@@ -2695,30 +2842,43 @@ apply_a750_cp_stall_fix() {
     local tu_cmd="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
     [[ ! -f "$tu_cmd" ]] && { log_warn "tu_cmd_buffer.cc not found"; return 0; }
     if grep -q "A750_CP_STALL_FIX" "$tu_cmd"; then
-        log_info "A750 CP stall: already applied"
+        log_info "A750 CP stall fix already applied"
         return 0
     fi
-
     python3 - "$tu_cmd" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-stall = """
-   /* A750_CP_STALL_FIX */
-   if (cmd->device->physical_device->dev_id.gpu_id == 0x750) {
-      tu_cs_emit_pkt7(&cmd->cs, CP_WAIT_FOR_IDLE, 0);
-      tu_cs_emit_pkt7(&cmd->cs, CP_WAIT_FOR_ME, 0);
-   }
-"""
-for fn in [r'tu_cmd_buffer_end_render_pass', r'tu_CmdEndRenderPass2?']:
-    m = re.search(rf'({fn}\s*\([^{{]*\{{)', c)
-    if m:
-        ins = c.find('\n', c.find('{', m.start())) + 1
-        c = c[:ins] + stall + c[ins:]
+n = 0
+stall = (
+    "\n   if (cmd_buffer->device->physical_device->dev_id.gpu_id == 0x750) {\n"
+    "      tu_cs_emit_pkt7(&cmd_buffer->cs, CP_WAIT_FOR_IDLE, 0); /* A750_CP_STALL_FIX */\n"
+    "      tu_cs_emit_pkt7(&cmd_buffer->cs, CP_WAIT_FOR_ME, 0);\n"
+    "   }\n"
+)
+stall_cmd = (
+    "\n   if (cmd->device->physical_device->dev_id.gpu_id == 0x750) {\n"
+    "      tu_cs_emit_pkt7(&cmd->cs, CP_WAIT_FOR_IDLE, 0); /* A750_CP_STALL_FIX */\n"
+    "      tu_cs_emit_pkt7(&cmd->cs, CP_WAIT_FOR_ME, 0);\n"
+    "   }\n"
+)
+for fn, inject in [
+    (r'(tu_EndCommandBuffer\s*\([^{]*\{)', stall),
+    (r'(tu_cmd_buffer_end\s*\([^{]*\{)', stall),
+    (r'(tu_cmd_render_pass_teardown\s*\([^{]*\{)', stall_cmd),
+    (r'(tu_CmdEndRendering\s*\([^{]*\{)', stall),
+]:
+    m = re.search(fn, c)
+    if m and "A750_CP_STALL_FIX" not in c:
+        ins = c.find('{', m.start()) + 1
+        eol = c.find('\n', ins)
+        c = c[:eol+1] + inject + c[eol+1:]
+        n += 1
         break
-c += "\n/* A750_CP_STALL_FIX */\n"
+if n == 0:
+    print("[INFO] A750 CP stall: injection point not found, skipping (safe)")
 with open(fp, 'w') as f: f.write(c)
-print("[OK] A750 CP stall fix applied")
+print(f"[OK] A750 CP stall fix: {n} changes")
 PYEOF
     log_success "A750 CP stall fix applied"
 }
@@ -2766,25 +2926,14 @@ import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n = 0
-uche_inject = (
-    "\n   if (pdevice->dev_id.gpu_id == 0x750) {\n"
-    "      pdevice->info->a6xx.magic.UCHE_CACHE_WAYS = 0x00084000; /* A750_UCHE_FIX */\n"
-    "   }\n"
-)
-for fn in [r'(tu_physical_device_init[^{]*\{)',
-           r'(tu_enumerate_physical_devices[^{]*\{)']:
-    m = re.search(fn, c)
-    if m and "A750_UCHE_FIX" not in c:
-        ins = c.find('\n', c.find('{', m.start())) + 1
-        c = c[:ins] + uche_inject + c[ins:]
-        n += 1
-        break
 for pat, repl in [
-    (r'(UCHE_CACHE_WAYS\s*=\s*)0x[0-9a-fA-F]+', r'\g<1>0x00084000 /* A750_UCHE_FIX */'),
+    (r'(RB_UNKNOWN_8E04\s*=\s*)0x[0-9a-fA-F]+', r'\g<1>0x01000000 /* A750_UCHE_FIX */'),
+    (r'(UCHE_UNKNOWN_0E47\s*=\s*)0x[0-9a-fA-F]+', r'\g<1>0x00084000 /* A750_UCHE_FIX */'),
 ]:
-    if "A750_UCHE_FIX" not in c:
-        c, k = re.subn(pat, repl, c, count=1)
-        n += k
+    c, k = re.subn(pat, repl, c, count=1)
+    n += k
+if n == 0:
+    print("[INFO] A750 UCHE: magic reg patterns not found, skipping (safe)")
 with open(fp, 'w') as f: f.write(c)
 print(f"[OK] A750 UCHE tuning: {n} changes")
 PYEOF
