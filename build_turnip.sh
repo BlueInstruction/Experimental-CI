@@ -958,6 +958,8 @@ with open(fp) as f: c = f.read()
 
 turbo_init = """
 /* DECK_EMU_PERF_INIT */
+#include <fcntl.h>
+#include <unistd.h>
 static void
 tu_deck_perf_init(void)
 {
@@ -1107,6 +1109,8 @@ import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 turbo_func = """
+#include <fcntl.h>
+#include <unistd.h>
 static void
 tu_try_activate_turbo(void)
 {
@@ -2502,7 +2506,7 @@ tu_a750_force_bindless_limits(struct tu_physical_device *pdev)
    (void)dt;
    /* limits already patched at source level — this is a belt-and-suspenders
     * runtime override in case Mesa's reported limits still cap us */
-   VkPhysicalDeviceLimits *lim = &pdev->vk.properties.limits;
+   VkPhysicalDeviceLimits *lim = &pdev->vk.properties.properties.limits;
    lim->maxBoundDescriptorSets                        = 8;
    lim->maxDescriptorSetSamplers                      = 0x0FFFFFFFu;
    lim->maxDescriptorSetUniformBuffers                = 0x0FFFFFFFu;
@@ -2517,7 +2521,7 @@ if first_static and "tu_a750_force_bindless_limits" not in c:
     c = c[:first_static.start()+1] + BINDLESS_GUARD_CODE + c[first_static.start()+1:]
     n += 1
 
-call_code = "\n   tu_a750_force_bindless_limits(pdevice); /* A750_FORCE_BINDLESS_APPLIED */\n"
+call_code = "\n   tu_a750_force_bindless_limits(device); /* A750_FORCE_BINDLESS_APPLIED */\n"
 for init_fn in [r'tu_physical_device_init\s*\([^{]*\{',
                 r'tu_enumerate_physical_devices\s*\([^{]*\{']:
     m = re.search(init_fn, c)
@@ -2634,6 +2638,7 @@ n = 0
 
 SPOOF_FUNC = """
 /* A750_ENGINE_SPOOF_APPLIED: AMD vendor spoof for vkd3d engine sessions */
+#include <sys/system_properties.h>
 static void
 tu_a750_apply_engine_spoof(struct tu_physical_device *pdev)
 {
@@ -2662,7 +2667,7 @@ if first_fn and "tu_a750_apply_engine_spoof" not in c:
     n += 1
 
 SPOOF_CALL = (
-    "\n   tu_a750_apply_engine_spoof(pdevice); /* A750_ENGINE_SPOOF_APPLIED */\n"
+    "\n   tu_a750_apply_engine_spoof(device); /* A750_ENGINE_SPOOF_APPLIED */\n"
 )
 
 for fn_pat in [r'(tu_physical_device_init\s*\([^{]*\{)',
@@ -2866,7 +2871,7 @@ for fn, inject in [
     (r'(tu_EndCommandBuffer\s*\([^{]*\{)', stall),
     (r'(tu_cmd_buffer_end\s*\([^{]*\{)', stall),
     (r'(tu_cmd_render_pass_teardown\s*\([^{]*\{)', stall_cmd),
-    (r'(tu_CmdEndRendering\s*\([^{]*\{)', stall),
+    (r'(tu_CmdEndRendering\s*\([^{]*\{)', stall_cmd),
 ]:
     m = re.search(fn, c)
     if m and "A750_CP_STALL_FIX" not in c:
