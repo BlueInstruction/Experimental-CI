@@ -4,36 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       VERSION:
-        description: "vkd3d-proton tag/ref or latest"
+        description: "Version (e.g., v3.0b)"
         required: false
-        default: "latest"
-      LLVM_MINGW_TAG:
-        description: "llvm-mingw release tag or latest"
-        required: false
-        default: "latest"
-      VULKAN_HEADERS_REF:
-        description: "Vulkan-Headers tag/ref, latest, or main"
-        required: false
-        default: "latest"
+        default: "v3.0b"
       BUILD_TYPE:
-        description: "Meson build type"
         type: choice
         default: "release"
-        options:
-          - release
-          - debug
-      PATCH_PROFILE:
-        description: "Patch profile"
-        type: choice
-        default: "balanced"
-        options:
-          - none
-          - balanced
-          - aggressive
-      PUBLISH_RELEASE:
-        description: "Create GitHub release"
-        type: boolean
-        default: true
+        options: ["release", "debug"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -41,420 +18,330 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write
 
 defaults:
   run:
-    shell: bash
+    shell: bash {0}
 
 env:
-  PYTHONUNBUFFERED: "1"
+  TOOLCHAIN_DIR: /opt/llvm-mingw
 
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      vkd3d_ref: ${{ steps.resolve.outputs.vkd3d_ref }}
-      llvm_mingw_tag: ${{ steps.resolve.outputs.llvm_mingw_tag }}
-      vulkan_headers_ref: ${{ steps.resolve.outputs.vulkan_headers_ref }}
-      source_commit: ${{ steps.resolve.outputs.source_commit }}
-      version: ${{ steps.resolve.outputs.version }}
-      build_date: ${{ steps.resolve.outputs.build_date }}
-      build_stamp: ${{ steps.resolve.outputs.build_stamp }}
-      release_tag: ${{ steps.resolve.outputs.release_tag }}
-      package_name: ${{ steps.resolve.outputs.package_name }}
-    steps:
-      - name: Resolve build inputs
-        id: resolve
-        env:
-          GH_TOKEN: ${{ github.token }}
-          INPUT_VERSION: ${{ inputs.VERSION }}
-          INPUT_LLVM_MINGW_TAG: ${{ inputs.LLVM_MINGW_TAG }}
-          INPUT_VULKAN_HEADERS_REF: ${{ inputs.VULKAN_HEADERS_REF }}
-        run: |
-          set -euo pipefail
-
-          resolve_vkd3d_ref() {
-            local ref="${1:-}"
-            if [[ -z "$ref" || "$ref" == "latest" ]]; then
-              gh api repos/HansKristian-Work/vkd3d-proton/releases/latest --jq .tag_name
-            else
-              printf '%s\n' "$ref"
-            fi
-          }
-
-          resolve_llvm_mingw_tag() {
-            local ref="${1:-}"
-            if [[ -z "$ref" || "$ref" == "latest" ]]; then
-              gh api repos/mstorsjo/llvm-mingw/releases/latest --jq .tag_name
-            else
-              printf '%s\n' "$ref"
-            fi
-          }
-
-          resolve_vulkan_headers_ref() {
-            local ref="${1:-}"
-            if [[ -z "$ref" || "$ref" == "latest" ]]; then
-              git ls-remote --tags --refs https://github.com/KhronosGroup/Vulkan-Headers.git 'v*' \
-                | awk '{print $2}' \
-                | sed 's#refs/tags/##' \
-                | sort -V \
-                | tail -n 1
-            else
-              printf '%s\n' "$ref"
-            fi
-          }
-
-          resolve_commit() {
-            local ref="$1"
-            local commit=""
-
-            commit="$(git ls-remote https://github.com/HansKristian-Work/vkd3d-proton.git "refs/tags/${ref}^{}" | awk 'NR==1 {print $1}')"
-            if [[ -z "$commit" ]]; then
-              commit="$(git ls-remote https://github.com/HansKristian-Work/vkd3d-proton.git "refs/tags/${ref}" | awk 'NR==1 {print $1}')"
-            fi
-            if [[ -z "$commit" ]]; then
-              commit="$(git ls-remote https://github.com/HansKristian-Work/vkd3d-proton.git "refs/heads/${ref}" | awk 'NR==1 {print $1}')"
-            fi
-            if [[ -z "$commit" ]]; then
-              echo "Unable to resolve commit for ref: ${ref}" >&2
-              exit 1
-            fi
-
-            printf '%s\n' "${commit:0:7}"
-          }
-
-          vkd3d_ref="$(resolve_vkd3d_ref "$INPUT_VERSION")"
-          llvm_mingw_tag="$(resolve_llvm_mingw_tag "$INPUT_LLVM_MINGW_TAG")"
-          vulkan_headers_ref="$(resolve_vulkan_headers_ref "$INPUT_VULKAN_HEADERS_REF")"
-          source_commit="$(resolve_commit "$vkd3d_ref")"
-          version="${vkd3d_ref#v}"
-          build_date="$(date -u +%Y%m%d)"
-          build_stamp="$(date -u +%Y%m%d-%H%M%S)"
-          release_tag="vkd3d-proton-${version}-arm64ec-${build_stamp}"
-          package_name="vkd3d-proton-${version}-arm64ec-${source_commit}"
-
-          {
-            echo "vkd3d_ref=$vkd3d_ref"
-            echo "llvm_mingw_tag=$llvm_mingw_tag"
-            echo "vulkan_headers_ref=$vulkan_headers_ref"
-            echo "source_commit=$source_commit"
-            echo "version=$version"
-            echo "build_date=$build_date"
-            echo "build_stamp=$build_stamp"
-            echo "release_tag=$release_tag"
-            echo "package_name=$package_name"
-          } >> "$GITHUB_OUTPUT"
-
   build:
     runs-on: ubuntu-latest
-    needs: prepare
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: arm64ec
-            triplet: arm64ec-w64-mingw32
-            cpu_family: aarch64
-            cpu: aarch64
-            package_dir: system32
-          - arch: x86
-            triplet: i686-w64-mingw32
-            cpu_family: x86
-            cpu: i686
-            package_dir: syswow64
+
     steps:
-      - name: Checkout workflow repository
-        uses: actions/checkout@v6.0.2
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: "3.x"
-
-      - name: Restore pip cache
-        uses: actions/cache@v5.0.4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-meson
-
-      - name: Restore llvm-mingw cache
-        id: llvm-cache
-        uses: actions/cache@v5.0.4
-        with:
-          path: ${{ runner.temp }}/llvm-mingw
-          key: llvm-mingw-${{ runner.os }}-${{ needs.prepare.outputs.llvm_mingw_tag }}-ubuntu-22.04-x86_64
-
-      - name: Restore ccache
-        uses: actions/cache@v5.0.4
-        with:
-          path: ~/.ccache
-          key: ccache-${{ runner.os }}-${{ matrix.arch }}-${{ needs.prepare.outputs.vkd3d_ref }}-${{ needs.prepare.outputs.llvm_mingw_tag }}-${{ inputs.BUILD_TYPE }}-${{ inputs.PATCH_PROFILE }}-${{ hashFiles('.github/workflows/vkd3d-arm64ec.yml', 'scripts/patch-vkd3d-proton-arm64ec.py') }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ matrix.arch }}-${{ needs.prepare.outputs.vkd3d_ref }}-${{ needs.prepare.outputs.llvm_mingw_tag }}-${{ inputs.BUILD_TYPE }}-${{ inputs.PATCH_PROFILE }}-
-            ccache-${{ runner.os }}-${{ matrix.arch }}-
-
-      - name: Install build dependencies
+      - name: Setup Dependencies
         run: |
-          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y \
-            ccache \
-            curl \
-            git \
-            jq \
-            ninja-build \
-            glslang-tools \
-            rsync \
-            spirv-tools \
-            unzip \
-            wget \
-            zstd
-          python -m pip install --upgrade pip meson
+          sudo apt-get install -y git ninja-build curl jq python3 glslang-tools spirv-tools zstd wget unzip
+          sudo pip3 install --upgrade meson
 
-      - name: Download llvm-mingw
-        if: steps.llvm-cache.outputs.cache-hit != 'true'
-        env:
-          LLVM_MINGW_TAG: ${{ needs.prepare.outputs.llvm_mingw_tag }}
+      - name: Setup LLVM MinGW Toolchain
         run: |
-          set -euo pipefail
-          archive="llvm-mingw-${LLVM_MINGW_TAG}-ucrt-ubuntu-22.04-x86_64.tar.xz"
-          url="https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_TAG}/${archive}"
-          curl -fsSL "$url" -o "$RUNNER_TEMP/llvm-mingw.tar.xz"
-          mkdir -p "$RUNNER_TEMP/llvm-mingw"
-          tar -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1 -xJf "$RUNNER_TEMP/llvm-mingw.tar.xz"
+          LLVM_TAG="20251104"
+          wget -q "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_TAG}/llvm-mingw-${LLVM_TAG}-ucrt-ubuntu-22.04-x86_64.tar.xz" -O llvm.tar.xz
+          sudo mkdir -p $TOOLCHAIN_DIR
+          sudo tar -C $TOOLCHAIN_DIR --strip-components=1 -xJf llvm.tar.xz
+          echo "$TOOLCHAIN_DIR/bin" >> $GITHUB_PATH
+          rm llvm.tar.xz
 
-      - name: Configure toolchain environment
+      - name: Verify Toolchain
         run: |
-          set -euo pipefail
-          echo "$RUNNER_TEMP/llvm-mingw/bin" >> "$GITHUB_PATH"
-          {
-            echo "CCACHE_DIR=$HOME/.ccache"
-            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
-            echo "CCACHE_COMPILERCHECK=content"
-            echo "CCACHE_MAXSIZE=2G"
-          } >> "$GITHUB_ENV"
+          arm64ec-w64-mingw32-clang --version
+          i686-w64-mingw32-clang --version
 
-      - name: Verify toolchain
+      - name: Fetch Version
         run: |
-          set -euo pipefail
-          "${{ matrix.triplet }}-clang" --version
-          "${{ matrix.triplet }}-strip" --version
+          VER="${{ inputs.VERSION }}"
+          [[ -z "$VER" ]] && VER="v3.0b"
+          [[ "$VER" =~ ^v ]] || VER="v$VER"
+          echo "TAG=$VER" >> $GITHUB_ENV
+          echo "VER=${VER#v}" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
-      - name: Clone vkd3d-proton
-        env:
-          VKD3D_REF: ${{ needs.prepare.outputs.vkd3d_ref }}
+      - name: Clone Source
         run: |
-          set -euo pipefail
-          git clone \
-            --branch "$VKD3D_REF" \
-            --depth 1 \
-            --filter=blob:none \
-            --recurse-submodules \
-            --shallow-submodules \
-            https://github.com/HansKristian-Work/vkd3d-proton.git \
-            "$RUNNER_TEMP/src"
+          git clone --recurse-submodules --recursive --branch ${{ env.TAG }} --depth 1 \
+            https://github.com/HansKristian-Work/vkd3d-proton.git src
+          cd src
+          COMMIT=$(git rev-parse --short HEAD)
+          echo "COMMIT=$COMMIT" >> $GITHUB_ENV
 
-      - name: Refresh Vulkan headers
-        env:
-          VULKAN_HEADERS_REF: ${{ needs.prepare.outputs.vulkan_headers_ref }}
+      - name: Update Vulkan Headers
         run: |
-          set -euo pipefail
-          if ! git clone --depth 1 --branch "$VULKAN_HEADERS_REF" https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vk-headers"; then
-            git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vk-headers"
-          fi
-          mkdir -p "$RUNNER_TEMP/src/include/vulkan"
-          rsync -a --delete "$RUNNER_TEMP/vk-headers/include/vulkan/" "$RUNNER_TEMP/src/include/vulkan/"
+          VK_TAG=$(curl -sL https://api.github.com/repos/KhronosGroup/Vulkan-Headers/releases/latest | jq -r '.tag_name // "main"')
+          git clone --depth 1 --branch "$VK_TAG" https://github.com/KhronosGroup/Vulkan-Headers.git vk-headers 2>/dev/null || \
+          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git vk-headers
+          [[ -d vk-headers/include/vulkan ]] && cp -r vk-headers/include/vulkan src/include/
+          rm -rf vk-headers
 
-      - name: Apply patch profile
-        if: ${{ inputs.PATCH_PROFILE != 'none' }}
-        env:
-          PATCH_PROFILE: ${{ inputs.PATCH_PROFILE }}
+      - name: Apply Patches
         run: |
-          set -euo pipefail
-          python3 "$GITHUB_WORKSPACE/scripts/patch-vkd3d-proton-arm64ec.py" \
-            --root "$RUNNER_TEMP/src" \
-            --profile "$PATCH_PROFILE"
+          cd src
+          cat > patch.py << 'PYSCRIPT'
+          import re, os, sys
 
-      - name: Configure build
-        working-directory: ${{ runner.temp }}/src
-        env:
-          BUILD_TYPE: ${{ inputs.BUILD_TYPE }}
+          applied = 0
+          errors = []
+
+          def patch_file(path, patches):
+              global applied, errors
+              if not os.path.exists(path):
+                  return
+              try:
+                  with open(path, "r", encoding='utf-8', errors='ignore') as f:
+                      c = f.read()
+              except Exception as e:
+                  errors.append(f"Read error {path}: {e}")
+                  return
+              orig = c
+              for p, r in patches:
+                  if len(re.findall(p, c)) > 0:
+                      c = re.sub(p, r, c)
+                      applied += 1
+              if c != orig:
+                  try:
+                      with open(path, "w", encoding='utf-8') as f:
+                          f.write(c)
+                  except Exception as e:
+                      errors.append(f"Write error {path}: {e}")
+
+          gpu = [
+              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x1002;'),
+              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x163f;'),
+              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1024ULL * 1024 * 1024;'),
+              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>16384ULL * 1024 * 1024;'),
+          ]
+
+          dev = [
+              (r'(\.UMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(\.CacheCoherentUMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(\.IsolatedMMU\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_8;'),
+              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_8;'),
+              (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\g<1>D3D_FEATURE_LEVEL_12_2;'),
+              (r'(D3D12SDKVersion\s*=\s*)[^;]+;', r'\g<1>619;'),
+              (r'(options1\.WaveOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options1\.WaveLaneCountMin\s*=\s*)[^;]+;', r'\g<1>32;'),
+              (r'(options1\.WaveLaneCountMax\s*=\s*)[^;]+;', r'\g<1>64;'),
+              (r'(options1\.Int64ShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options1\.ExpandedComputeResourceStates\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options2\.DepthBoundsTestSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options2\.ProgrammableSamplePositionsTier\s*=\s*)[^;]+;', r'\g<1>D3D12_PROGRAMMABLE_SAMPLE_POSITIONS_TIER_2;'),
+              (r'(options3\.BarycentricsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options3\.ThresholdCoefficientsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options4\.Native16BitShaderOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options4\.MSAAOperationsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RAYTRACING_TIER_1_2;'),
+              (r'(options5\.RenderPassesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RENDER_PASS_TIER_2;'),
+              (r'(options5\.SRVOnlyTiledResourceTier3\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options6\.VariableShadingRateTier\s*=\s*)[^;]+;', r'\g<1>D3D12_VARIABLE_SHADING_RATE_TIER_2;'),
+              (r'(options6\.ShadingRateImageTileSize\s*=\s*)[^;]+;', r'\g<1>8;'),
+              (r'(options6\.AdditionalShadingRatesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options6\.BackgroundProcessingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options6\.PerPrimitiveShadingRateSupportedWithViewportIndexing\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\g<1>D3D12_MESH_SHADER_TIER_1;'),
+              (r'(options7\.SamplerFeedbackTier\s*=\s*)[^;]+;', r'\g<1>D3D12_SAMPLER_FEEDBACK_TIER_1_0;'),
+              (r'(options9\.AdvancedTextureOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options9\.WriteableMSAATexturesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options9\.MeshShaderSupportsFullRangeRenderTargetArrayIndex\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options10\.VariableRateShadingSumCombinerSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options10\.MeshShaderPerPrimitiveShadingRateSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options11\.AtomicInt64OnDescriptorHeapResourceSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options11\.AtomicInt64OnGroupSharedSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options11\.AtomicInt64OnTypedResourceSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options11\.DerivativesInMeshAndAmplificationShadersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options12\.EnhancedBarriersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options12\.RelaxedFormatCastingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options12\.UnifiedImageLayoutsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options12\.MSPrimitivesPipelineStatisticIncludesCulledPrimitives\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.UnrestrictedBufferTextureCopyPitchSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.UnrestrictedVertexElementAlignmentSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.InvertedViewportHeightFlipsYSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.InvertedViewportDepthFlipsZSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.TextureCopyBetweenDimensionsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.AlphaBlendFactorSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options16\.GPUUploadHeapSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options16\.MapDefaultHeapAllocationSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options17\.NonNormalizedCoordinateSamplersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options17\.ManualWriteTrackingResourceSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options21\.WorkGraphsTier\s*=\s*)[^;]+;', r'\g<1>D3D12_WORK_GRAPHS_TIER_1_0;'),
+              (r'(options21\.ExecuteIndirectTier\s*=\s*)[^;]+;', r'\g<1>D3D12_EXECUTE_INDIRECT_TIER_1_1;'),
+              (r'(options21\.SampleCmpGradientAndBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options21\.ExtendedCommandInfoSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;'),
+              (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_TILED_RESOURCES_TIER_4;'),
+              (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;'),
+              (r'(options\.ConservativeRasterizationTier\s*=\s*)[^;]+;', r'\g<1>D3D12_CONSERVATIVE_RASTERIZATION_TIER_3;'),
+              (r'(options\.ROVsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.TypedUAVLoadAdditionalFormats\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.OutputMergerLogicOp\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.PSSpecifiedStencilRefSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.CooperativeMatrixSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.GDeflateSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.AntiLagSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.DepthBiasControlSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.ComputeShaderDerivativesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.PageableDeviceLocalMemorySupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.DestructionNotifierSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.SharedResourceCompatibilityTier\s*=\s*)[^;]+;', r'\g<1>D3D12_SHARED_RESOURCE_COMPATIBILITY_TIER_2;'),
+              (r'(options\.IndependentFrontAndBackStencilRefMaskSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.TriangleFanSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.DynamicDepthBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.NarrowQuadrilateralLinesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.MismatchingOutputDimensionsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+          ]
+
+          patch_file("libs/vkd3d/device.c", gpu + dev)
+          for root, dirs, files in os.walk("libs/vkd3d"):
+              for f in files:
+                  if not f.endswith((".c", ".h")): continue
+                  if f == "device.c": continue
+                  path = os.path.join(root, f)
+                  if any(k in f for k in ["adapter", "feature", "caps", "d3d12"]):
+                      patch_file(path, gpu)
+
+          print(f"Applied {applied} patches")
+          if errors:
+              print(f"Errors: {len(errors)}")
+              sys.exit(1)
+          PYSCRIPT
+          python3 patch.py
+
+      - name: Create Cross Files
         run: |
-          set -euo pipefail
-
-          case "$BUILD_TYPE" in
-            release)
-              meson_buildtype="release"
-              cflags="-O3 -DNDEBUG -ffunction-sections -fdata-sections -fno-math-errno -fno-trapping-math"
-              ldflags="-Wl,--gc-sections"
-              lto_args=(-Db_lto=true -Db_lto_mode=thin -Db_ndebug=true)
-              ;;
-            debug)
-              meson_buildtype="debug"
-              cflags="-O0 -g3"
-              ldflags=""
-              lto_args=(-Db_lto=false -Db_ndebug=false)
-              ;;
-            *)
-              echo "Unsupported BUILD_TYPE: $BUILD_TYPE" >&2
-              exit 1
-              ;;
-          esac
-
-          cross_file="$RUNNER_TEMP/cross-${{ matrix.arch }}.txt"
-          cat > "$cross_file" <<EOF
+          cat > crossfile-arm64ec.txt << 'EOF'
           [binaries]
-          ar = '${{ matrix.triplet }}-ar'
-          c = ['ccache', '${{ matrix.triplet }}-clang']
-          cpp = ['ccache', '${{ matrix.triplet }}-clang++']
-          strip = '${{ matrix.triplet }}-strip'
-          windres = '${{ matrix.triplet }}-windres'
-          widl = '${{ matrix.triplet }}-widl'
-
+          ar = 'arm64ec-w64-mingw32-ar'
+          c = 'arm64ec-w64-mingw32-clang'
+          cpp = 'arm64ec-w64-mingw32-clang++'
+          ld = 'arm64ec-w64-mingw32-ld'
+          windres = 'arm64ec-w64-mingw32-windres'
+          strip = 'arm64ec-w64-mingw32-strip'
+          widl = 'arm64ec-w64-mingw32-widl'
           [host_machine]
           system = 'windows'
-          cpu_family = '${{ matrix.cpu_family }}'
-          cpu = '${{ matrix.cpu }}'
+          cpu_family = 'aarch64'
+          cpu = 'aarch64'
           endian = 'little'
           EOF
 
-          meson setup "build-${{ matrix.arch }}" \
-            --cross-file "$cross_file" \
-            --buildtype "$meson_buildtype" \
-            "${lto_args[@]}" \
-            -Dc_args="$cflags" \
-            -Dcpp_args="$cflags" \
-            -Dc_link_args="$ldflags" \
-            -Dcpp_link_args="$ldflags"
+          cat > crossfile-x86.txt << 'EOF'
+          [binaries]
+          ar = 'i686-w64-mingw32-ar'
+          c = 'i686-w64-mingw32-clang'
+          cpp = 'i686-w64-mingw32-clang++'
+          ld = 'i686-w64-mingw32-ld'
+          windres = 'i686-w64-mingw32-windres'
+          strip = 'i686-w64-mingw32-strip'
+          widl = 'i686-w64-mingw32-widl'
+          [host_machine]
+          system = 'windows'
+          cpu_family = 'x86'
+          cpu = 'i686'
+          endian = 'little'
+          EOF
 
-      - name: Build
-        working-directory: ${{ runner.temp }}/src
+      - name: Build ARM64EC + x86
         run: |
-          set -euo pipefail
-          ninja -C "build-${{ matrix.arch }}" -j"$(nproc)" 2>&1 | tee "build-${{ matrix.arch }}.log"
-          ccache --show-stats || true
+          export PATH="$TOOLCHAIN_DIR/bin:$PATH"
+          cd src
 
-      - name: Collect binaries
-        env:
-          BUILD_TYPE: ${{ inputs.BUILD_TYPE }}
-          PACKAGE_DIR: ${{ matrix.package_dir }}
-          TRIPLET: ${{ matrix.triplet }}
-        run: |
-          set -euo pipefail
-          stage="$RUNNER_TEMP/artifact/${PACKAGE_DIR}"
-          mkdir -p "$stage"
-          for dll in d3d12.dll d3d12core.dll; do
-            dll_path="$(find "$RUNNER_TEMP/src/build-${{ matrix.arch }}" -name "$dll" -type f | head -n 1)"
-            if [[ -z "$dll_path" ]]; then
-              echo "Missing ${dll} for ${{ matrix.arch }}" >&2
-              exit 1
-            fi
-            cp "$dll_path" "$stage/"
-            echo "$dll_path: $(stat -c%s "$dll_path") bytes"
-          done
-          if [[ "$BUILD_TYPE" == "release" ]]; then
-            "${TRIPLET}-strip" --strip-all "$stage"/*.dll || true
+          BUILD_FLAGS="-O3 -DNDEBUG"
+          [[ "${{ inputs.BUILD_TYPE }}" == "debug" ]] && BUILD_FLAGS="-O0 -g -DDEBUG"
+
+          meson setup build-arm64ec \
+            --cross-file ../crossfile-arm64ec.txt \
+            --buildtype release \
+            -Dc_args="$BUILD_FLAGS" \
+            -Dcpp_args="$BUILD_FLAGS"
+          ninja -C build-arm64ec -j$(nproc) 2>&1 | tee build-arm64ec.log
+          if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+            tail -n 50 build-arm64ec.log
+            exit 1
           fi
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v7.0.0
-        with:
-          name: build-${{ matrix.arch }}
-          compression-level: 0
-          path: ${{ runner.temp }}/artifact/
-          retention-days: 30
+          meson setup build-x86 \
+            --cross-file ../crossfile-x86.txt \
+            --buildtype release \
+            -Dc_args="$BUILD_FLAGS" \
+            -Dcpp_args="$BUILD_FLAGS"
+          ninja -C build-x86 -j$(nproc) 2>&1 | tee build-x86.log
+          if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+            tail -n 50 build-x86.log
+            exit 1
+          fi
 
-  package:
-    runs-on: ubuntu-latest
-    needs:
-      - prepare
-      - build
-    steps:
-      - name: Download ARM64EC artifact
-        uses: actions/download-artifact@v8.0.1
-        with:
-          name: build-arm64ec
-          path: ${{ runner.temp }}/pkg
-
-      - name: Download x86 artifact
-        uses: actions/download-artifact@v8.0.1
-        with:
-          name: build-x86
-          path: ${{ runner.temp }}/pkg
-
-      - name: Create package metadata
-        working-directory: ${{ runner.temp }}/pkg
-        env:
-          VERSION: ${{ needs.prepare.outputs.version }}
-          BUILD_DATE: ${{ needs.prepare.outputs.build_date }}
-          SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
-          PACKAGE_NAME: ${{ needs.prepare.outputs.package_name }}
+      - name: Verify Build
         run: |
-          set -euo pipefail
-          cat > profile.json <<EOF
+          for arch in arm64ec x86; do
+            for dll in d3d12.dll d3d12core.dll; do
+              DLL=$(find src/build-${arch} -name "$dll" -type f | head -1)
+              [[ -z "$DLL" ]] && { echo "Missing: $arch/$dll"; exit 1; }
+              echo "$DLL: $(stat -c%s "$DLL") bytes"
+            done
+          done
+
+      - name: Create Package
+        run: |
+          mkdir -p pkg/system32 pkg/syswow64
+          for dll in d3d12.dll d3d12core.dll; do
+            SRC=$(find src/build-arm64ec -name "$dll" -type f | head -1)
+            [[ -n "$SRC" ]] && cp "$SRC" pkg/system32/
+            SRC=$(find src/build-x86 -name "$dll" -type f | head -1)
+            [[ -n "$SRC" ]] && cp "$SRC" pkg/syswow64/
+          done
+          llvm-strip --strip-all pkg/system32/*.dll pkg/syswow64/*.dll 2>/dev/null || true
+
+          cat > pkg/profile.json << 'JSONEOF'
           {
             "type": "VKD3D",
-            "versionName": "${VERSION}-arm64ec-${SOURCE_COMMIT}",
-            "versionCode": ${BUILD_DATE},
+            "versionName": "__VER__-arm64ec-__COMMIT__",
+            "versionCode": __DATE__,
             "description": "VKD3D-Proton ARM64EC patched",
             "files": [
-              {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
-              {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
-              {"source": "syswow64/d3d12.dll", "target": "\${syswow64}/d3d12.dll"},
-              {"source": "syswow64/d3d12core.dll", "target": "\${syswow64}/d3d12core.dll"}
+              {"source": "system32/d3d12.dll", "target": "${system32}/d3d12.dll"},
+              {"source": "system32/d3d12core.dll", "target": "${system32}/d3d12core.dll"},
+              {"source": "syswow64/d3d12.dll", "target": "${syswow64}/d3d12.dll"},
+              {"source": "syswow64/d3d12core.dll", "target": "${syswow64}/d3d12core.dll"}
             ]
           }
-          EOF
+          JSONEOF
+          sed -i "s/__VER__/${{ env.VER }}/g; s/__COMMIT__/${{ env.COMMIT }}/g; s/__DATE__/${{ env.BUILD_DATE }}/g" pkg/profile.json
 
-          find . -type f \( -name '*.dll' -o -name 'profile.json' \) -print
-          tar --zstd -cf "../${PACKAGE_NAME}.wcp" .
-          sha256sum "../${PACKAGE_NAME}.wcp" | tee "../${PACKAGE_NAME}.wcp.sha256"
+          PKG="vkd3d-proton-${{ env.VER }}-arm64ec-${{ env.COMMIT }}"
+          cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
+          echo "PKG=$PKG" >> $GITHUB_ENV
 
-      - name: Upload package artifact
-        uses: actions/upload-artifact@v7.0.0
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ needs.prepare.outputs.package_name }}
-          compression-level: 0
-          path: |
-            ${{ runner.temp }}/${{ needs.prepare.outputs.package_name }}.wcp
-            ${{ runner.temp }}/${{ needs.prepare.outputs.package_name }}.wcp.sha256
+          name: ${{ env.PKG }}
+          path: ${{ env.PKG }}.wcp
           retention-days: 30
 
-      - name: Publish GitHub release
-        if: ${{ inputs.PUBLISH_RELEASE }}
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-          SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
-          BUILD_STAMP: ${{ needs.prepare.outputs.build_stamp }}
-          VKD3D_REF: ${{ needs.prepare.outputs.vkd3d_ref }}
-          LLVM_MINGW_TAG: ${{ needs.prepare.outputs.llvm_mingw_tag }}
-          VULKAN_HEADERS_REF: ${{ needs.prepare.outputs.vulkan_headers_ref }}
-          PATCH_PROFILE: ${{ inputs.PATCH_PROFILE }}
-          BUILD_TYPE: ${{ inputs.BUILD_TYPE }}
-          PACKAGE_NAME: ${{ needs.prepare.outputs.package_name }}
-          REPOSITORY: ${{ github.repository }}
         run: |
-          set -euo pipefail
-          notes_file="$RUNNER_TEMP/release-notes.md"
-          cat > "$notes_file" <<EOF
-          ## VKD3D-Proton ${VERSION} ARM64EC
-
-          - Source ref: \`${VKD3D_REF}\`
-          - Source commit: \`${SOURCE_COMMIT}\`
-          - llvm-mingw: \`${LLVM_MINGW_TAG}\`
-          - Vulkan-Headers: \`${VULKAN_HEADERS_REF}\`
-          - Build type: \`${BUILD_TYPE}\`
-          - Patch profile: \`${PATCH_PROFILE}\`
-          - Build stamp: \`${BUILD_STAMP}\`
-
-          Source: https://github.com/HansKristian-Work/vkd3d-proton
-          EOF
-
+          RELEASE_TAG="vkd3d-proton-${{ env.VER }}-arm64ec-${{ env.BUILD_DATE }}"
+          gh release delete "$RELEASE_TAG" --repo "${{ github.repository }}" --yes 2>/dev/null || true
+          git push --delete origin "$RELEASE_TAG" 2>/dev/null || true
           gh release create "$RELEASE_TAG" \
-            --repo "$REPOSITORY" \
-            --title "VKD3D-Proton ${VERSION} ARM64EC - ${BUILD_STAMP}" \
-            --notes-file "$notes_file" \
-            "$RUNNER_TEMP/${PACKAGE_NAME}.wcp" \
-            "$RUNNER_TEMP/${PACKAGE_NAME}.wcp.sha256"
+            --repo "${{ github.repository }}" \
+            --title "VKD3D-Proton ${{ env.VER }} ARM64EC — ${{ env.BUILD_DATE }}" \
+            --notes "## VKD3D-Proton ${{ env.VER }} ARM64EC
+          Commit: \`${{ env.COMMIT }}\` — Build: \`${{ env.BUILD_DATE }}\`
+          [Source](https://github.com/HansKristian-Work/vkd3d-proton)" \
+            "${{ env.PKG }}.wcp"
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf src pkg
