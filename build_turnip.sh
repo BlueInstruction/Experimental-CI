@@ -2511,7 +2511,7 @@ tu_a750_force_bindless_limits(struct tu_physical_device *pdev)
    (void)dt;
    /* limits already patched at source level — this is a belt-and-suspenders
     * runtime override in case Mesa's reported limits still cap us */
-   (void)pdev; /* A750_FORCE_BINDLESS_APPLIED: limits patched via regex */
+   VkPhysicalDeviceLimits *lim = &pdev->vk.properties.limits;
    lim->maxBoundDescriptorSets                        = 8;
    lim->maxDescriptorSetSamplers                      = 0x0FFFFFFFu;
    lim->maxDescriptorSetUniformBuffers                = 0x0FFFFFFFu;
@@ -2526,7 +2526,7 @@ if first_static and "tu_a750_force_bindless_limits" not in c:
     c = c[:first_static.start()+1] + BINDLESS_GUARD_CODE + c[first_static.start()+1:]
     n += 1
 
-call_code = "\n   tu_a750_force_bindless_limits(pdevice); /* A750_FORCE_BINDLESS_APPLIED */\n"
+call_code = "\n   tu_a750_force_bindless_limits(device); /* A750_FORCE_BINDLESS_APPLIED */\n"
 for init_fn in [r'tu_physical_device_init\s*\([^{]*\{',
                 r'tu_enumerate_physical_devices\s*\([^{]*\{']:
     m = re.search(init_fn, c)
@@ -2642,6 +2642,7 @@ with open(fp) as f: c = f.read()
 n = 0
 
 SPOOF_FUNC = """
+#include <sys/system_properties.h>
 /* A750_ENGINE_SPOOF_APPLIED: AMD vendor spoof for vkd3d engine sessions */
 static void
 tu_a750_apply_engine_spoof(struct tu_physical_device *pdev)
@@ -2671,7 +2672,7 @@ if first_fn and "tu_a750_apply_engine_spoof" not in c:
     n += 1
 
 SPOOF_CALL = (
-    "\n   tu_a750_apply_engine_spoof(pdevice); /* A750_ENGINE_SPOOF_APPLIED */\n"
+    "\n   tu_a750_apply_engine_spoof(device); /* A750_ENGINE_SPOOF_APPLIED */\n"
 )
 
 for fn_pat in [r'(tu_physical_device_init\s*\([^{]*\{)',
