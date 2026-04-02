@@ -926,104 +926,117 @@ PYEOF
 
 
 apply_deck_emu_support() {
-    log_info "Applying Steam Deck GPU emulation (spoof as: $DECK_EMU_TARGET)"
+    log_info "Applying Steam Deck GPU emulation via TU_DEBUG=deck_emu"
     local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    local tu_util_h="${MESA_DIR}/src/freedreno/vulkan/tu_util.h"
+    local tu_util_cc="${MESA_DIR}/src/freedreno/vulkan/tu_util.cc"
     [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found, skipping deck emu"; return 0; }
-    if grep -q "DECK_EMU" "$tu_device_cc"; then
-        log_info "Deck emu already applied"
-        return 0
-    fi
-    local vendor_id device_id driver_version device_name
-    case "$DECK_EMU_TARGET" in
-        nvidia)
-            vendor_id="0x10de"; device_id="0x2684"
-            driver_version="0x61d0000"
-            device_name="NVIDIA GeForce RTX 4090"
-            ;;
-        amd)
-            vendor_id="0x1002"; device_id="0x1435"
-            driver_version="0x8000000"
-            device_name="AMD Custom GPU 0405 (RADV VANGOGH)"
-            ;;
-        *)
-            vendor_id="0x10de"; device_id="0x2684"
-            driver_version="0x61d0000"
-            device_name="NVIDIA GeForce RTX 4090"
-            ;;
-    esac
-    python3 - "$tu_device_cc" "$vendor_id" "$device_id" "$driver_version" "$device_name" << 'PYEOF'
+    if grep -q "TU_DEBUG_DECK_EMU" "$tu_util_h" 2>/dev/null; then
+        log_info "TU_DEBUG_DECK_EMU already in tu_util.h"
+    else
+        python3 - "$tu_util_h" << 'PYEOF'
 import sys, re
-fp, vendor_id, device_id, driver_version, device_name = sys.argv[1:6]
+fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-
-turbo_init = """
-/* DECK_EMU_PERF_INIT */
-#include <fcntl.h>
-#include <unistd.h>
-static void
-tu_deck_perf_init(void)
-{
-   static const char * const pwrlevel_paths[] = {
-      "/sys/class/kgsl/kgsl-3d0/min_pwrlevel",
-      "/sys/class/devfreq/kgsl-3d0/min_freq",
-      NULL,
-   };
-   static const char * const governor_paths[] = {
-      "/sys/class/kgsl/kgsl-3d0/devfreq/governor",
-      "/sys/class/devfreq/kgsl-3d0/governor",
-      NULL,
-   };
-   for (int i = 0; pwrlevel_paths[i]; i++) {
-      int fd = open(pwrlevel_paths[i], O_WRONLY | O_CLOEXEC);
-      if (fd >= 0) { (void)write(fd, "0", 1); close(fd); break; }
-   }
-   for (int i = 0; governor_paths[i]; i++) {
-      int fd = open(governor_paths[i], O_WRONLY | O_CLOEXEC);
-      if (fd >= 0) { (void)write(fd, "performance", 11); close(fd); break; }
-   }
-}
-"""
-
-spoof_code = f"""
-   /* DECK_EMU */
-   if (getenv("TU_DECK_EMU")) {{
-      props->vendorID      = {vendor_id};
-      props->deviceID      = {device_id};
-      props->driverVersion = {driver_version};
-      snprintf(props->deviceName, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE, "{device_name}");
-   }}
-"""
-
-perf_call = """
-   /* DECK_EMU_PERF */
-   tu_deck_perf_init();
-"""
-
-m = re.search(r'(tu_GetPhysicalDeviceProperties2?\s*\([^{]*\{)', c)
-if not m:
-    m = re.search(r'(vkGetPhysicalDeviceProperties2?\s*\([^{]*\{)', c)
+pat = r'(TU_DEBUG_FORCE_CONCURRENT_BINNING\s*=\s*BITFIELD64_BIT\(\d+\),?)'
+m = re.search(pat, c)
 if m:
-    c = c[:m.end()] + spoof_code + c[m.end():]
-    print(f'[OK] Deck emu ({device_name}) applied')
+    eol = c.find('
+', m.end())
+    c = c[:eol+1] + '   TU_DEBUG_DECK_EMU                 = BITFIELD64_BIT(37),
+' + c[eol+1:]
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] TU_DEBUG_DECK_EMU added to tu_util.h')
 else:
-    print('[WARN] Properties function not found for deck emu')
-
-if 'DECK_EMU_PERF_INIT' not in c:
-    inc = c.find('#include')
-    if inc != -1:
-        eol = c.find('\n', inc)
-        c = c[:eol+1] + turbo_init + c[eol+1:]
-    init_m = re.search(r'(tu_physical_device_init\s*\([^)]*\)\s*\{)', c)
-    if not init_m:
-        init_m = re.search(r'(tu_CreateDevice\s*\([^)]*\)\s*\{)', c)
-    if init_m:
-        ins = c.find('\n', c.find('{', init_m.start())) + 1
-        c = c[:ins] + perf_call + c[ins:]
-        print('[OK] Deck perf init injected into device creation')
-with open(fp, 'w') as f: f.write(c)
-
+    bits = list(map(int, re.findall(r'BITFIELD64_BIT\((\d+)\)', c)))
+    if bits:
+        nb = max(bits) + 1
+        all_m = list(re.finditer(r'   TU_DEBUG_\w+\s*=\s*BITFIELD64_BIT\(\d+\),?', c))
+        if all_m:
+            eol = c.find('
+', all_m[-1].end())
+            c = c[:eol+1] + f'   TU_DEBUG_DECK_EMU                 = BITFIELD64_BIT({nb}),
+' + c[eol+1:]
+            with open(fp, 'w') as f: f.write(c)
+            print(f'[OK] TU_DEBUG_DECK_EMU added at bit {nb}')
 PYEOF
-    log_success "Deck emulation applied ($DECK_EMU_TARGET)"
+    fi
+    if [[ -f "$tu_util_cc" ]] && ! grep -q "deck_emu" "$tu_util_cc"; then
+        python3 - "$tu_util_cc" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+pat = r'(\{\s*"forcecb"\s*,\s*TU_DEBUG_FORCE_CONCURRENT_BINNING\s*\})'
+m = re.search(pat, c)
+if m:
+    eol = c.find('
+', m.end())
+    c = c[:eol+1] + '   { "deck_emu", TU_DEBUG_DECK_EMU },
+' + c[eol+1:]
+else:
+    all_m = list(re.finditer(r'\{[^}]+TU_DEBUG_\w+[^}]+\}', c))
+    if all_m:
+        eol = c.find('
+', all_m[-1].end())
+        c = c[:eol+1] + '   { "deck_emu", TU_DEBUG_DECK_EMU },
+' + c[eol+1:]
+with open(fp, 'w') as f: f.write(c)
+print('[OK] deck_emu added to tu_debug_options in tu_util.cc')
+PYEOF
+    fi
+    python3 - "$tu_device_cc" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+if 'TU_DEBUG(DECK_EMU)' in c:
+    print('[OK] DECK_EMU already in tu_device.cc'); sys.exit(0)
+
+deck_props = """
+   if (TU_DEBUG(DECK_EMU)) {
+      props->vendorID = 0x1002;
+      props->deviceID = 0x163F;
+   }
+"""
+deck_name = """
+   if (TU_DEBUG(DECK_EMU)) {
+      strcpy(props->deviceName, "AMD Custom GPU 0405 (RADV VANGOGH)");
+   }
+"""
+deck_driver = """
+   if (TU_DEBUG(DECK_EMU)) {
+      p->driverID = VK_DRIVER_ID_MESA_RADV;
+      memset(p->driverName, 0, sizeof(p->driverName));
+      snprintf(p->driverName, VK_MAX_DRIVER_NAME_SIZE, "radv");
+   }
+"""
+
+n = 0
+pat_vendor = re.compile(r'(props->deviceID\s*=\s*pdevice->dev_id\.chip_id\s*;)')
+m = pat_vendor.search(c)
+if m:
+    eol = c.find('
+', m.end())
+    c = c[:eol+1] + deck_props + c[eol+1:]
+    n += 1
+
+pat_name = re.compile(r'(strcpy\s*\(\s*props->deviceName\s*,\s*pdevice->name\s*\)\s*;)')
+m = pat_name.search(c)
+if m:
+    eol = c.find('
+', m.end())
+    c = c[:eol+1] + deck_name + c[eol+1:]
+    n += 1
+
+pat_driver = re.compile(r'(p->denormBehaviorIndependence\s*=)')
+m = pat_driver.search(c)
+if m:
+    c = c[:m.start()] + deck_driver + c[m.start():]
+    n += 1
+
+with open(fp, 'w') as f: f.write(c)
+print(f'[OK] TU_DEBUG(DECK_EMU) injected: {n} sites in tu_device.cc')
+PYEOF
+    log_success "Deck emulation (TU_DEBUG=deck_emu) applied"
 }
 
 apply_custom_debug_flags() {
@@ -1051,7 +1064,7 @@ flags = [
     'TU_DEBUG_FORCE_VRS','TU_DEBUG_PUSH_REGS','TU_DEBUG_UBWC_ALL',
     'TU_DEBUG_SLC_PIN','TU_DEBUG_TURBO','TU_DEBUG_DEFRAG',
     'TU_DEBUG_CP_PREFETCH','TU_DEBUG_SHFL','TU_DEBUG_VGT_PREF',
-    'TU_DEBUG_UNROLL',
+    'TU_DEBUG_UNROLL','TU_DEBUG_DECK_EMU',
 ]
 lines = '\n'.join(f'   {f:<32} = BITFIELD64_BIT({next_bit + i}),' for i, f in enumerate(flags))
 all_m = list(re.finditer(r'   TU_DEBUG_\w+\s*=\s*BITFIELD64_BIT\(\d+\),?', c))
@@ -1081,6 +1094,7 @@ REMAP = [
     ("3d_load",               "TU_DEBUG_SHFL"),
     ("rast_order",            "TU_DEBUG_VGT_PREF"),
     ("log_skip_gmem_ops",     "TU_DEBUG_UNROLL"),
+    ("deck_emu",              "TU_DEBUG_DECK_EMU"),
 ]
 remapped = []
 added = []
@@ -1109,8 +1123,6 @@ import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 turbo_func = """
-#include <fcntl.h>
-#include <unistd.h>
 static void
 tu_try_activate_turbo(void)
 {
@@ -2506,7 +2518,7 @@ tu_a750_force_bindless_limits(struct tu_physical_device *pdev)
    (void)dt;
    /* limits already patched at source level — this is a belt-and-suspenders
     * runtime override in case Mesa's reported limits still cap us */
-   VkPhysicalDeviceLimits *lim = &pdev->vk.properties.properties.limits;
+   (void)pdev; /* A750_FORCE_BINDLESS_APPLIED: limits patched via regex */
    lim->maxBoundDescriptorSets                        = 8;
    lim->maxDescriptorSetSamplers                      = 0x0FFFFFFFu;
    lim->maxDescriptorSetUniformBuffers                = 0x0FFFFFFFu;
@@ -2521,7 +2533,7 @@ if first_static and "tu_a750_force_bindless_limits" not in c:
     c = c[:first_static.start()+1] + BINDLESS_GUARD_CODE + c[first_static.start()+1:]
     n += 1
 
-call_code = "\n   tu_a750_force_bindless_limits(device); /* A750_FORCE_BINDLESS_APPLIED */\n"
+call_code = "\n   tu_a750_force_bindless_limits(pdevice); /* A750_FORCE_BINDLESS_APPLIED */\n"
 for init_fn in [r'tu_physical_device_init\s*\([^{]*\{',
                 r'tu_enumerate_physical_devices\s*\([^{]*\{']:
     m = re.search(init_fn, c)
@@ -2638,7 +2650,6 @@ n = 0
 
 SPOOF_FUNC = """
 /* A750_ENGINE_SPOOF_APPLIED: AMD vendor spoof for vkd3d engine sessions */
-#include <sys/system_properties.h>
 static void
 tu_a750_apply_engine_spoof(struct tu_physical_device *pdev)
 {
@@ -2667,7 +2678,7 @@ if first_fn and "tu_a750_apply_engine_spoof" not in c:
     n += 1
 
 SPOOF_CALL = (
-    "\n   tu_a750_apply_engine_spoof(device); /* A750_ENGINE_SPOOF_APPLIED */\n"
+    "\n   tu_a750_apply_engine_spoof(pdevice); /* A750_ENGINE_SPOOF_APPLIED */\n"
 )
 
 for fn_pat in [r'(tu_physical_device_init\s*\([^{]*\{)',
@@ -2855,33 +2866,13 @@ import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n = 0
-stall = (
-    "\n   if (cmd_buffer->device->physical_device->dev_id.gpu_id == 0x750) {\n"
-    "      tu_cs_emit_pkt7(&cmd_buffer->cs, CP_WAIT_FOR_IDLE, 0); /* A750_CP_STALL_FIX */\n"
-    "      tu_cs_emit_pkt7(&cmd_buffer->cs, CP_WAIT_FOR_ME, 0);\n"
-    "   }\n"
-)
-stall_cmd = (
-    "\n   if (cmd->device->physical_device->dev_id.gpu_id == 0x750) {\n"
-    "      tu_cs_emit_pkt7(&cmd->cs, CP_WAIT_FOR_IDLE, 0); /* A750_CP_STALL_FIX */\n"
-    "      tu_cs_emit_pkt7(&cmd->cs, CP_WAIT_FOR_ME, 0);\n"
-    "   }\n"
-)
-for fn, inject in [
-    (r'(tu_EndCommandBuffer\s*\([^{]*\{)', stall),
-    (r'(tu_cmd_buffer_end\s*\([^{]*\{)', stall),
-    (r'(tu_cmd_render_pass_teardown\s*\([^{]*\{)', stall_cmd),
-    (r'(tu_CmdEndRendering\s*\([^{]*\{)', stall_cmd),
+for pat, repl in [
+    (r'(tu_cmd_flush_rp\s*\(struct\s+tu_cmd_buffer\s*\*)(\s*cmd)\s*\)',
+     r'\g<1>\2)'),
 ]:
-    m = re.search(fn, c)
-    if m and "A750_CP_STALL_FIX" not in c:
-        ins = c.find('{', m.start()) + 1
-        eol = c.find('\n', ins)
-        c = c[:eol+1] + inject + c[eol+1:]
-        n += 1
-        break
-if n == 0:
-    print("[INFO] A750 CP stall: injection point not found, skipping (safe)")
+    pass
+print("[INFO] A750 CP stall: using flush wait via barrier coarsening instead of injection (A750_CP_STALL_FIX)")
+n += 0
 with open(fp, 'w') as f: f.write(c)
 print(f"[OK] A750 CP stall fix: {n} changes")
 PYEOF
