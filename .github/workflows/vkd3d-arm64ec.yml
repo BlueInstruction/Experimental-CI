@@ -1,4 +1,4 @@
-name: Vkd3d Proton ARM64EC
+name: Vkd3d Proton Arm64ec 
 
 on:
   schedule:
@@ -467,20 +467,18 @@ jobs:
           BUILD_FLAGS="-O3 -DNDEBUG -flto=thin"
           LINK_FLAGS="-flto=thin -Wl,--icf=safe"
 
-          # Remove ALL static linking from meson.build BEFORE meson setup
+          # Remove -static from link_args assignments ONLY (not from has_link_argument checks)
           python3 -c "
-          import re
-          with open('meson.build', 'r') as f: c = f.read()
-          # Comment out every line that adds -static flags
-          c = re.sub(r\"(.*link_args\s*\+=\s*'-static'.*)\", r'# \\1 # DISABLED_ARM64EC', c)
-          c = re.sub(r\"(.*link_args\s*\+=\s*'-static-libgcc'.*)\", r'# \\1 # DISABLED_ARM64EC', c)
-          c = re.sub(r\"(.*link_args\s*\+=\s*'-static-libstdc\+\+'.*)\", r'# \\1 # DISABLED_ARM64EC', c)
-          # Also catch array-style: ['-static', '-static-libgcc', '-static-libstdc++']
-          c = re.sub(r\"'-static'\s*,?\", '', c)
-          c = re.sub(r\"'-static-libgcc'\s*,?\", '', c)
-          c = re.sub(r\"'-static-libstdc\+\+'\s*,?\", '', c)
-          with open('meson.build', 'w') as f: f.write(c)
-          print('[OK] Removed all -static flags from meson.build')
+          with open('meson.build', 'r') as f: lines = f.readlines()
+          out = []
+          for line in lines:
+              # Only skip lines that ADD -static to link_args
+              if 'link_args' in line and '+=' in line and '-static' in line:
+                  out.append('# ' + line.rstrip() + '  # DISABLED_ARM64EC\n')
+              else:
+                  out.append(line)
+          with open('meson.build', 'w') as f: f.writelines(out)
+          print('[OK] Removed -static link_args from meson.build')
           "
 
           # ARM64EC build
@@ -497,10 +495,8 @@ jobs:
             exit 1
           fi
 
-          # Restore meson.build for x86 build (x86 needs static)
-          cd ..
-          git -C src checkout -- src/meson.build 2>/dev/null || true
-          cd src
+          # Restore meson.build for x86 build
+          git checkout -- meson.build 2>/dev/null || true
 
           # x86 build - static works fine
           meson setup build-x86 \
