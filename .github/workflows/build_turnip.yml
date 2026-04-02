@@ -21,6 +21,8 @@ on:
         options:
           - staging/26.0
 
+
+
       build_variant:
         type: choice
         description: "Build variant"
@@ -28,6 +30,8 @@ on:
         options:
           - patched
           - normal
+
+
 
       patch_preset:
         type: choice
@@ -255,7 +259,7 @@ jobs:
       TU_FORCE_IMMEDIATE_PRESENT: 1
       PATCH_PRESET: ${{ inputs.patch_preset }}
       FRAME_CONTROL_PRESET: emulator${{ needs.pre-check.outputs.patch_flags }}${{ needs.pre-check.outputs.a750_flags }}
-      # ── A750 Hacks — expanded from a750_hack_preset via pre-check
+      # ── A750 Hacks — expanded from a750_hack_preset via pre-check ────────
       A750_HACK_PRESET: ${{ inputs.a750_hack_preset }}
       CFLAGS_EXTRA: >-
         ${{ inputs.enable_perf == true
