@@ -397,6 +397,8 @@ jobs:
                   content = f.read()
               if "FSYNC_TIMELINE_OPT" not in content:
                   opt = """
+          #include <stdbool.h>
+          #include <stdint.h>
           /* FSYNC_TIMELINE_OPT: fast-path for timeline semaphore waits */
           static inline bool vkd3d_fsync_fence_signaled(uint64_t current, uint64_t target)
           {
