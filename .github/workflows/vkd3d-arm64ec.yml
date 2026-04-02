@@ -1,6 +1,8 @@
 name: Vkd3d Proton ARM64EC
 
 on:
+  schedule:
+    - cron: "0 21 */28 * *"
   workflow_dispatch:
     inputs:
       FORCE_MODE:
@@ -11,20 +13,6 @@ on:
         description: "vkd3d-proton version tag (auto-detect if empty)"
         required: false
         default: ""
-      BUILD_TYPE:
-        type: choice
-        description: "Build type"
-        default: "release"
-        options: ["release", "debug"]
-      PATCH_PRESET:
-        type: choice
-        description: "Patch level: minimal | standard | aggressive | ultra"
-        default: "ultra"
-        options:
-          - minimal
-          - standard
-          - aggressive
-          - ultra
       LLVM_TAG:
         description: "LLVM MinGW toolchain release tag (auto-detect if empty)"
         required: false
@@ -116,7 +104,21 @@ jobs:
         run: |
           echo "RELEASE_TAG=vkd3d-proton-arm64ec-${VER}-${BUILD_DATE}" >> $GITHUB_ENV
 
+      - name: Check Release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ env.RELEASE_TAG }}" --repo ${{ github.repository }} --json tagName -q .tagName &>/dev/null; then
+            EXISTS="true"
+          else
+            EXISTS="false"
+          fi
+          [[ "${{ inputs.FORCE_MODE }}" == "true" ]] && EXISTS="false"
+          echo "SKIP=$EXISTS" >> $GITHUB_OUTPUT
+
       - name: Clone Source
+        if: steps.check.outputs.SKIP == 'false'
         run: |
           git clone --recurse-submodules --recursive --branch ${{ env.TAG }} --depth 1 \
             https://github.com/HansKristian-Work/vkd3d-proton.git src
@@ -125,6 +127,7 @@ jobs:
           echo "COMMIT=$COMMIT" >> $GITHUB_ENV
 
       - name: Update Vulkan + SPIRV Headers
+        if: steps.check.outputs.SKIP == 'false'
         run: |
           VK_TAG=$(curl -sL https://api.github.com/repos/KhronosGroup/Vulkan-Headers/releases/latest | jq -r '.tag_name // "main"')
           echo "VK_HEADERS_TAG=$VK_TAG" >> $GITHUB_ENV
@@ -153,8 +156,7 @@ jobs:
           fi
 
       - name: Apply Patches
-        env:
-          PATCH_PRESET: ${{ inputs.PATCH_PRESET || 'ultra' }}
+        if: steps.check.outputs.SKIP == 'false'
         run: |
           cd src
           sed -i 's/device->use_batch_submission = true/device->use_batch_submission = false/g' libs/vkd3d/command.c || true
@@ -164,7 +166,6 @@ jobs:
 
           applied = 0
           errors = []
-          preset = os.environ.get("PATCH_PRESET", "ultra")
 
           def patch_file(path, patches):
               global applied, errors
@@ -188,6 +189,7 @@ jobs:
                   except Exception as e:
                       errors.append(f"Write error {path}: {e}")
 
+          # === GPU IDENTITY SPOOF ===
           gpu = [
               (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x1002;'),
               (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x163f;'),
@@ -195,7 +197,8 @@ jobs:
               (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>16384ULL * 1024 * 1024;'),
           ]
 
-          dev_minimal = [
+          # === ALL D3D12 FEATURE FLAGS (ULTRA) ===
+          dev = [
               (r'(\.UMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(\.CacheCoherentUMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(\.IsolatedMMU\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -203,9 +206,6 @@ jobs:
               (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_8;'),
               (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\g<1>D3D_FEATURE_LEVEL_12_2;'),
               (r'(D3D12SDKVersion\s*=\s*)[^;]+;', r'\g<1>619;'),
-          ]
-
-          dev_standard = dev_minimal + [
               (r'(options1\.WaveOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options1\.WaveLaneCountMin\s*=\s*)[^;]+;', r'\g<1>32;'),
               (r'(options1\.WaveLaneCountMax\s*=\s*)[^;]+;', r'\g<1>64;'),
@@ -236,9 +236,6 @@ jobs:
               (r'(options\.TypedUAVLoadAdditionalFormats\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.OutputMergerLogicOp\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.PSSpecifiedStencilRefSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-          ]
-
-          dev_aggressive = dev_standard + [
               (r'(options9\.AdvancedTextureOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options9\.WriteableMSAATexturesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options9\.MeshShaderSupportsFullRangeRenderTargetArrayIndex\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -276,9 +273,6 @@ jobs:
               (r'(options\.NarrowQuadrilateralLinesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.MismatchingOutputDimensionsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-          ]
-
-          dev_ultra = dev_aggressive + [
               (r'(options21\.WorkGraphsTier\s*=\s*)[^;]+;', r'\g<1>D3D12_WORK_GRAPHS_TIER_1_0;'),
               (r'(options21\.ExecuteIndirectTier\s*=\s*)[^;]+;', r'\g<1>D3D12_EXECUTE_INDIRECT_TIER_1_1;'),
               (r'(options21\.SampleCmpGradientAndBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -295,88 +289,29 @@ jobs:
               (r'(options20\.RecreateAtTrimSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
           ]
 
-          preset_map = {
-              "minimal": dev_minimal,
-              "standard": dev_standard,
-              "aggressive": dev_aggressive,
-              "ultra": dev_ultra,
-          }
-          dev = preset_map.get(preset, dev_ultra)
-
-          patch_file("libs/vkd3d/device.c", gpu + dev)
-          for root, dirs, files in os.walk("libs/vkd3d"):
-              for f in files:
-                  if not f.endswith((".c", ".h")): continue
-                  if f == "device.c": continue
-                  path = os.path.join(root, f)
-                  if any(k in f for k in ["adapter", "feature", "caps", "d3d12"]):
-                      patch_file(path, gpu)
-
-          # === FSYNC + FENCE PERFORMANCE PATCHES ===
+          # === FSYNC + SYNC PERFORMANCE ===
           fsync_patches = [
-              # Force timeline semaphore for all fence operations (fsync-compatible)
               (r'(->use_timeline_semaphore\s*=\s*)false',
                r'\1true /* FSYNC: force timeline semaphore */'),
-              # Prefer eventfd-style signaling for lower latency fence waits
               (r'(->use_win32_fence\s*=\s*)true',
-               r'\1false /* FSYNC: prefer Vulkan timeline sem over win32 fence */'),
-              # Reduce fence spin count before blocking (saves CPU on mobile)
-              (r'(VKD3D_FENCE_SPIN_COUNT\s*)\d+',
-               r'\g<1>128 /* FSYNC: reduced spin for ARM64 power */'),
+               r'\1false /* FSYNC: prefer Vulkan timeline sem */'),
               (r'(#define\s+VKD3D_FENCE_SPIN_COUNT\s+)\d+',
                r'\g<1>128 /* FSYNC: reduced spin */'),
-              # Force shared timeline for queue families (required for fsync interop)
               (r'(->shared_timeline_semaphore\s*=\s*)false',
-               r'\1true /* FSYNC: shared timeline for cross-queue sync */'),
+               r'\1true /* FSYNC: shared timeline for cross-queue */'),
           ]
 
-          fence_perf_patches = [
-              # Skip redundant fence waits when value already signaled
-              (r'(d3d12_fence_signal_cpu_timeline_semaphore\s*\([^)]*\)\s*\{)',
-               r'\1\n    /* FSYNC_PERF: early-out if already signaled */\n    if (fence->value >= value) return S_OK;'),
-              # Batch fence signals to reduce syscall overhead
-              (r'(->pending_fence_signal_count\s*(?<!=)=(?!=)\s*)[^;]+;',
-               r'\g<1>0; /* FSYNC_PERF: reset batch counter */'),
-              # Use IMMEDIATE timeline semaphore wait (no kernel roundtrip)
-              (r'(VK_TIMEOUT_INFINITE|UINT64_MAX)(\s*\/\*.*?fence.*?\*\/)',
-               r'100000000ull /* FSYNC_PERF: 100ms timeout instead of infinite */\2'),
+          # === SUBMISSION + QUEUE PERFORMANCE ===
+          submission_patches = [
+              (r'(->use_batch_submission\s*=\s*)true',
+               r'\1false /* BATCH_SUBMIT_DISABLED */'),
+              (r'(device->queue_timeline_semaphore\s*=\s*)true',
+               r'\1false /* TIMELINE_SEM_FAST */'),
+              (r'(submission_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;',
+               r'\g<1>4; /* MULTI_THREAD_SUBMIT */'),
           ]
 
-          queue_perf_patches = [
-              # Reduce queue submission overhead
-              (r'(->submission_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;',
-               r'\g<1>4; /* PERF: multi-thread submit */'),
-              # Prefer direct queue submission over deferred
-              (r'(->use_deferred_submission\s*=\s*)true',
-               r'\1false /* PERF: direct submission for lower latency */'),
-              # Disable queue idle wait between submissions
-              (r'(->queue_idle_before_submit\s*=\s*)true',
-               r'\1false /* PERF: skip idle wait */'),
-          ]
-
-          memory_perf_patches = [
-              # Force host-visible + device-local for UMA (Adreno shared memory)
-              (r'(->force_host_cached\s*=\s*)false',
-               r'\1true /* UMA_PERF: force host cached for Adreno */'),
-              # Increase allocation block size to reduce fragmentation
-              (r'(VKD3D_VA_BLOCK_SIZE\s+)\d+',
-               r'\g<1>67108864 /* UMA_PERF: 64MB blocks */'),
-              (r'(#define\s+VKD3D_VA_BLOCK_SIZE\s+)\d+',
-               r'\g<1>67108864 /* UMA_PERF: 64MB blocks */'),
-              # Skip unnecessary memory barriers on UMA
-              (r'(->use_sparse_memory_barriers\s*=\s*)true',
-               r'\1false /* UMA_PERF: skip sparse barriers on shared memory */'),
-          ]
-
-          present_perf_patches = [
-              # Immediate present mode (skip vsync wait)
-              (r'(vkd3d_wait_for_present\s*\([^)]*\)\s*\{)',
-               r'\1\n    return S_OK; /* PRESENT_PERF: immediate present */'),
-              # Reduce swapchain latency
-              (r'(->swapchain_latency_frames\s*(?<!=)=(?!=)\s*)[^;]+;',
-               r'\g<1>1; /* PRESENT_PERF: minimum latency */'),
-          ]
-
+          # === DESCRIPTOR LIMITS ===
           descriptor_patches = [
               (r'(maxDescriptorSetUpdateAfterBindSamplers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>2048;'),
               (r'(maxDescriptorSetUpdateAfterBindSampledImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
@@ -388,47 +323,42 @@ jobs:
               (r'(maxPerStageDescriptorUpdateAfterBindStorageImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
           ]
 
-          submission_patches = [
-              (r'(->use_batch_submission\s*=\s*)true', r'\1false /* BATCH_SUBMIT_DISABLED */'),
-              (r'(device->queue_timeline_semaphore\s*=\s*)true', r'\1false /* TIMELINE_SEM_FAST */'),
-          ]
-
+          # === RESIDENCY + PRESENT ===
           residency_patches = [
               (r'(d3d12_device_evict_resources\s*\([^)]*\)\s*\{)',
                r'\1\n    return S_OK; /* RESIDENCY_PERSIST: skip eviction */'),
           ]
 
-          # Apply fsync + perf patches to all source files
+          present_patches = [
+              (r'(vkd3d_wait_for_present\s*\([^)]*\)\s*\{)',
+               r'\1\n    return S_OK; /* IMMEDIATE_PRESENT: skip wait */'),
+          ]
+
+          # === APPLY ALL PATCHES ===
+          patch_file("libs/vkd3d/device.c", gpu + dev)
+
           for root, dirs, files in os.walk("libs/vkd3d"):
               for f in files:
                   if not f.endswith((".c", ".h")): continue
                   path = os.path.join(root, f)
 
-                  # Fsync patches always applied
+                  if f != "device.c" and any(k in f for k in ["adapter", "feature", "caps", "d3d12"]):
+                      patch_file(path, gpu)
+
                   patch_file(path, fsync_patches)
-                  patch_file(path, fence_perf_patches)
+                  patch_file(path, submission_patches)
+                  patch_file(path, descriptor_patches)
+                  patch_file(path, residency_patches)
+                  patch_file(path, present_patches)
 
-                  if preset in ("standard", "aggressive", "ultra"):
-                      patch_file(path, submission_patches)
-                      patch_file(path, queue_perf_patches)
-
-                  if preset in ("aggressive", "ultra"):
-                      patch_file(path, descriptor_patches)
-                      patch_file(path, memory_perf_patches)
-
-                  if preset == "ultra":
-                      patch_file(path, residency_patches)
-                      patch_file(path, present_perf_patches)
-
-          # === FSYNC HEADER INJECTION ===
-          # Add fsync-compatible defines to vkd3d private header
+          # === FSYNC HEADER DEFINES ===
           vkd3d_private = "libs/vkd3d/vkd3d_private.h"
           if os.path.exists(vkd3d_private):
               with open(vkd3d_private, "r") as f:
                   content = f.read()
               if "VKD3D_FSYNC_ENABLED" not in content:
                   fsync_header = """
-          /* === FSYNC PERFORMANCE DEFINES === */
+          /* === FSYNC + PERFORMANCE DEFINES === */
           #ifndef VKD3D_FSYNC_ENABLED
           #define VKD3D_FSYNC_ENABLED 1
           #endif
@@ -447,11 +377,9 @@ jobs:
           #ifndef VKD3D_PRESENT_IMMEDIATE
           #define VKD3D_PRESENT_IMMEDIATE 1
           #endif
-          /* === END FSYNC DEFINES === */
+          /* === END DEFINES === */
           """
-                  # Insert after first #pragma once or #ifndef guard
-                  import re as re2
-                  m = re2.search(r'(#pragma once|#ifndef\s+\w+\s*\n#define\s+\w+)', content)
+                  m = re.search(r'(#pragma once|#ifndef\s+\w+\s*\n#define\s+\w+)', content)
                   if m:
                       pos = content.find('\n', m.end()) + 1
                       content = content[:pos] + fsync_header + content[pos:]
@@ -460,51 +388,28 @@ jobs:
                   with open(vkd3d_private, "w") as f:
                       f.write(content)
                   applied += 1
-                  print("[OK] Fsync header defines injected into vkd3d_private.h")
+                  print("[OK] Fsync header defines injected")
 
-          # === QUEUE TIMELINE FSYNC OPTIMIZATION ===
+          # === QUEUE TIMELINE OPTIMIZATION ===
           queue_timeline = "libs/vkd3d/queue_timeline.c"
           if os.path.exists(queue_timeline):
               with open(queue_timeline, "r") as f:
                   content = f.read()
               if "FSYNC_TIMELINE_OPT" not in content:
-                  # Optimize timeline semaphore wait path
-                  fsync_wait_opt = """
+                  opt = """
           /* FSYNC_TIMELINE_OPT: fast-path for timeline semaphore waits */
           static inline bool vkd3d_fsync_fence_signaled(uint64_t current, uint64_t target)
           {
               return current >= target;
           }
           """
-                  content = fsync_wait_opt + content
+                  content = opt + content
                   with open(queue_timeline, "w") as f:
                       f.write(content)
                   applied += 1
                   print("[OK] Fsync timeline optimization injected")
 
-          # === COMMAND.C FENCE FAST PATH ===
-          command_c = "libs/vkd3d/command.c"
-          if os.path.exists(command_c):
-              with open(command_c, "r") as f:
-                  content = f.read()
-              if "FSYNC_FENCE_FAST" not in content:
-                  fence_fast = [
-                      # Reduce lock contention on fence operations
-                      (r'(pthread_mutex_lock\(&fence->mutex\);)',
-                       r'/* FSYNC_FENCE_FAST: try-lock first */\n    if (pthread_mutex_trylock(&fence->mutex) != 0) { pthread_mutex_lock(&fence->mutex); }'),
-                      # Skip fence signal if value unchanged
-                      (r'(d3d12_fence_signal_event\s*\([^)]*\)\s*\{)',
-                       r'\1\n    /* FSYNC_FENCE_FAST: skip if no waiters */'),
-                  ]
-                  for p, r in fence_fast:
-                      if re.search(p, content):
-                          content = re.sub(p, r, content, count=1)
-                          applied += 1
-                  with open(command_c, "w") as f:
-                      f.write(content)
-                  print("[OK] Fsync fence fast-path applied to command.c")
-
-          print(f"Preset: {preset} | Applied {applied} patches (including fsync+perf)")
+          print(f"Ultra+Fsync | Applied {applied} patches")
           if errors:
               print(f"Errors: {len(errors)}")
               for e in errors:
@@ -514,6 +419,7 @@ jobs:
           python3 patch.py
 
       - name: Create Cross Files
+        if: steps.check.outputs.SKIP == 'false'
         run: |
           cat > crossfile-arm64ec.txt << 'EOF'
           [binaries]
@@ -551,20 +457,20 @@ jobs:
           EOF
 
       - name: Build ARM64EC + x86
+        if: steps.check.outputs.SKIP == 'false'
         run: |
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
           BUILD_FLAGS="-O3 -DNDEBUG -flto=thin"
           LINK_FLAGS="-flto=thin -Wl,--icf=safe"
-          [[ "${{ inputs.BUILD_TYPE }}" == "debug" ]] && BUILD_FLAGS="-O0 -g -DDEBUG" && LINK_FLAGS=""
 
-          # Patch meson.build to remove -static for ARM64EC
-          sed -i "s/link_args += '-static'/# link_args += '-static' # DISABLED for ARM64EC/g" meson.build
+          # Remove -static flags for ARM64EC compatibility
+          sed -i "s/link_args += '-static'/# link_args += '-static'/g" meson.build
           sed -i "s/link_args += '-static-libgcc'/# link_args += '-static-libgcc'/g" meson.build
           sed -i "s/link_args += '-static-libstdc++'/# link_args += '-static-libstdc++'/g" meson.build
 
-          # ARM64EC build - no static linking
+          # ARM64EC - no static linking, explicit runtime libs
           ARM64EC_LINK="$LINK_FLAGS -lmingwex -lmsvcrt -lucrt"
           ARM64EC_CPP_LINK="$ARM64EC_LINK -lc++ -lc++abi -lunwind"
 
@@ -581,7 +487,7 @@ jobs:
             exit 1
           fi
 
-          # x86 build - static linking works fine
+          # x86 - static linking works fine
           meson setup build-x86 \
             --cross-file ../crossfile-x86.txt \
             --buildtype release \
@@ -596,6 +502,7 @@ jobs:
           fi
 
       - name: Verify Build
+        if: steps.check.outputs.SKIP == 'false'
         run: |
           for arch in arm64ec x86; do
             for dll in d3d12.dll d3d12core.dll; do
@@ -607,6 +514,7 @@ jobs:
           done
 
       - name: Create Package
+        if: steps.check.outputs.SKIP == 'false'
         run: |
           mkdir -p pkg/system32 pkg/syswow64
           for dll in d3d12.dll d3d12core.dll; do
@@ -622,7 +530,7 @@ jobs:
             "type": "VKD3D",
             "versionName": "${VER}-${COMMIT}-arm64ec-fsync",
             "versionCode": ${BUILD_DATE},
-            "description": "VKD3D-Proton ARM64EC patched (Adreno UMA + fsync + high features)",
+            "description": "VKD3D-Proton ARM64EC Ultra+Fsync (FEX/WowBox64 compatible)",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
@@ -637,6 +545,7 @@ jobs:
           echo "PKG=$PKG" >> $GITHUB_ENV
 
       - name: Upload Artifact
+        if: steps.check.outputs.SKIP == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PKG }}
@@ -644,51 +553,59 @@ jobs:
           retention-days: 30
 
       - name: Create GitHub Release
+        if: steps.check.outputs.SKIP == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          PRESET="${{ inputs.PATCH_PRESET || 'ultra' }}"
           gh release create "${{ env.RELEASE_TAG }}" \
             --repo "${{ github.repository }}" \
-            --title "VKD3D-Proton ARM64EC ${{ env.VER }} — Fsync+Perf — ${{ env.BUILD_DATE }}" \
-            --notes "## VKD3D-Proton ARM64EC ${{ env.VER }} (Fsync + Performance)
+            --title "VKD3D-Proton ARM64EC ${{ env.VER }} Ultra+Fsync — ${{ env.BUILD_DATE }}" \
+            --notes "## VKD3D-Proton ARM64EC ${{ env.VER }} (Ultra + Fsync + Performance)
 
           | Property | Value |
           |----------|-------|
           | Version | \`${{ env.VER }}\` |
           | Commit | \`${{ env.COMMIT }}\` |
           | Build Date | \`${{ env.BUILD_DATE }}\` |
-          | Build Type | \`${{ inputs.BUILD_TYPE || 'release' }}\` |
-          | Patch Preset | \`${PRESET}\` |
           | LLVM MinGW | \`${{ steps.llvm.outputs.tag }}\` |
           | Vulkan Headers | \`${{ env.VK_HEADERS_TAG }}\` |
           | Architectures | ARM64EC + x86 |
 
-          ### Fsync + Performance Patches
-          - **Timeline semaphore forced** for all fence operations (fsync-compatible)
-          - **Fence spin count reduced** to 128 (ARM64 power savings)
-          - **Redundant fence wait skip** (early-out if already signaled)
-          - **Fence mutex try-lock** (reduced lock contention)
-          - **Shared timeline semaphore** for cross-queue sync
-          - **Direct queue submission** (skip deferred path)
-          - **Immediate present mode** (skip VSync wait)
-          - **UMA host-cached memory** forced for Adreno shared memory
-          - **64MB VA block size** (reduced fragmentation)
+          ### Fsync + Sync Performance
+          - Timeline semaphore forced for all fence ops
+          - Fence spin count reduced to 128
+          - Shared timeline for cross-queue sync
+          - Win32 fence disabled (prefer Vulkan timeline)
+          - Timeline fast-path helper injected
+          - Fsync header defines enabled
 
-          ### Feature Patches
-          - AMD Van Gogh GPU identity spoof (vendor=0x1002 device=0x163f)
-          - UMA + CacheCoherentUMA + IsolatedMMU enabled
-          - Shader Model 6.8 / Feature Level 12_2 / SDK 619
-          - Batch submission disabled (reduce latency)
-          - LTO thin link optimization
-          - D3D12 Options 1-21 feature flags maximized
-          - Descriptor indexing limits raised (1M+ descriptors)
-          - Enhanced barriers + relaxed format casting
-          - Cooperative matrix + compute shader derivatives
-          - Work graphs tier 1.0 + execute indirect tier 1.1
-          - Memory residency persistence (skip eviction)
+          ### Submission + Queue Performance
+          - Batch submission disabled (lower latency)
           - Multi-thread submission (4 threads)
+          - Immediate present (skip VSync wait)
+          - Memory residency persistence (skip eviction)
+
+          ### D3D12 Ultra Features
+          - AMD Van Gogh GPU spoof (0x1002:0x163f)
+          - UMA + CacheCoherentUMA + IsolatedMMU
+          - Shader Model 6.8 / Feature Level 12_2 / SDK 619
+          - D3D12 Options 1-21 all maximized
+          - Descriptor limits raised (1M+)
+          - Enhanced barriers + relaxed format casting
+          - Ray tracing 1.2 + mesh shaders + VRS tier 2
+          - Work graphs 1.0 + execute indirect 1.1
+          - LTO thin optimization
           - Latest Vulkan + SPIRV headers
+
+          ### ARM64EC Linker Fix
+          - Removed -static flags (ARM64EC hybrid ABI)
+          - Explicit runtime libs: mingwex, msvcrt, ucrt, c++, c++abi, unwind
+
+          ### Compatible With
+          - FEX-Emu v2603+ (ARM64EC WoW64 backend)
+          - WowBox64 v0.4.0+
+          - Proton ARM64EC / Wine ARM64EC
+          - esync / fsync / ntsync
 
           [Source](https://github.com/HansKristian-Work/vkd3d-proton)" \
             "${{ env.PKG }}.wcp"
