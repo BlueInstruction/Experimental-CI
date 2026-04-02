@@ -467,29 +467,42 @@ jobs:
           BUILD_FLAGS="-O3 -DNDEBUG -flto=thin"
           LINK_FLAGS="-flto=thin -Wl,--icf=safe"
 
-          # Remove -static flags for ARM64EC compatibility
-          sed -i "s/link_args += '-static'/# link_args += '-static'/g" meson.build
-          sed -i "s/link_args += '-static-libgcc'/# link_args += '-static-libgcc'/g" meson.build
-          sed -i "s/link_args += '-static-libstdc++'/# link_args += '-static-libstdc++'/g" meson.build
+          # Remove ALL static linking from meson.build BEFORE meson setup
+          python3 -c "
+          import re
+          with open('meson.build', 'r') as f: c = f.read()
+          # Comment out every line that adds -static flags
+          c = re.sub(r\"(.*link_args\s*\+=\s*'-static'.*)\", r'# \\1 # DISABLED_ARM64EC', c)
+          c = re.sub(r\"(.*link_args\s*\+=\s*'-static-libgcc'.*)\", r'# \\1 # DISABLED_ARM64EC', c)
+          c = re.sub(r\"(.*link_args\s*\+=\s*'-static-libstdc\+\+'.*)\", r'# \\1 # DISABLED_ARM64EC', c)
+          # Also catch array-style: ['-static', '-static-libgcc', '-static-libstdc++']
+          c = re.sub(r\"'-static'\s*,?\", '', c)
+          c = re.sub(r\"'-static-libgcc'\s*,?\", '', c)
+          c = re.sub(r\"'-static-libstdc\+\+'\s*,?\", '', c)
+          with open('meson.build', 'w') as f: f.write(c)
+          print('[OK] Removed all -static flags from meson.build')
+          "
 
-          # ARM64EC - no static linking, explicit runtime libs
-          ARM64EC_LINK="$LINK_FLAGS -lmingwex -lmsvcrt -lucrt"
-          ARM64EC_CPP_LINK="$ARM64EC_LINK -lc++ -lc++abi -lunwind"
-
+          # ARM64EC build
           meson setup build-arm64ec \
             --cross-file ../crossfile-arm64ec.txt \
             --buildtype release \
             -Dc_args="$BUILD_FLAGS" \
             -Dcpp_args="$BUILD_FLAGS" \
-            -Dc_link_args="$ARM64EC_LINK" \
-            -Dcpp_link_args="$ARM64EC_CPP_LINK"
+            -Dc_link_args="$LINK_FLAGS -lmingwex -lmsvcrt -lucrt" \
+            -Dcpp_link_args="$LINK_FLAGS -lmingwex -lmsvcrt -lucrt -lc++ -lc++abi -lunwind"
           ninja -C build-arm64ec -j$(nproc) 2>&1 | tee build-arm64ec.log
           if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
             tail -n 50 build-arm64ec.log
             exit 1
           fi
 
-          # x86 - static linking works fine
+          # Restore meson.build for x86 build (x86 needs static)
+          cd ..
+          git -C src checkout -- src/meson.build 2>/dev/null || true
+          cd src
+
+          # x86 build - static works fine
           meson setup build-x86 \
             --cross-file ../crossfile-x86.txt \
             --buildtype release \
