@@ -133,12 +133,10 @@ jobs:
           git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git vk-headers
           if [[ -d vk-headers/include/vulkan ]]; then
             cp -r vk-headers/include/vulkan src/include/
-            echo "Vulkan Headers updated to $VK_TAG"
           fi
           if [[ -d vk-headers/registry ]]; then
             mkdir -p src/registry
             cp -f vk-headers/registry/vk.xml src/registry/ 2>/dev/null || true
-            echo "Vulkan registry updated"
           fi
           rm -rf vk-headers
 
@@ -148,7 +146,6 @@ jobs:
             git clone --depth 1 --branch "$SPIRV_TAG" https://github.com/KhronosGroup/SPIRV-Headers.git spirv-h 2>/dev/null || true
             if [[ -d spirv-h/include/spirv ]]; then
               cp -r spirv-h/include/spirv src/include/ 2>/dev/null || true
-              echo "SPIRV Headers updated to $SPIRV_TAG"
             fi
             rm -rf spirv-h
           fi
@@ -157,7 +154,6 @@ jobs:
         if: steps.check.outputs.SKIP == 'false'
         run: |
           cd src
-          sed -i 's/device->use_batch_submission = true/device->use_batch_submission = false/g' libs/vkd3d/command.c || true
 
           cat > patch.py << 'PYSCRIPT'
           import re, os, sys
@@ -177,7 +173,7 @@ jobs:
                   return
               orig = c
               for p, r in patches:
-                  if len(re.findall(p, c)) > 0:
+                  if re.search(p, c):
                       c = re.sub(p, r, c)
                       applied += 1
               if c != orig:
@@ -195,7 +191,7 @@ jobs:
               (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>16384ULL * 1024 * 1024;'),
           ]
 
-          # === ALL D3D12 FEATURE FLAGS (ULTRA) ===
+          # === D3D12 FEATURE FLAGS ===
           dev = [
               (r'(\.UMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(\.CacheCoherentUMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -253,10 +249,24 @@ jobs:
               (r'(options13\.InvertedViewportDepthFlipsZSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options13\.TextureCopyBetweenDimensionsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options13\.AlphaBlendFactorSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options14\.IndependentFrontAndBackStencilSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options14\.TriangleFanSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options14\.DynamicDepthBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options15\.TriangleFanSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options15\.DynamicDepthBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options16\.GPUUploadHeapSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options16\.MapDefaultHeapAllocationSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options17\.NonNormalizedCoordinateSamplersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options17\.ManualWriteTrackingResourceSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options18\.RenderPassesValid\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options19\.MeshShaderSupportsFullRangeRenderTargetArrayIndex\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options19\.AnisoFilterWithPointMipSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options20\.ComputeOnlyWriteWatchSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options20\.RecreateAtTrimSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options21\.WorkGraphsTier\s*=\s*)[^;]+;', r'\g<1>D3D12_WORK_GRAPHS_TIER_1_0;'),
+              (r'(options21\.ExecuteIndirectTier\s*=\s*)[^;]+;', r'\g<1>D3D12_EXECUTE_INDIRECT_TIER_1_1;'),
+              (r'(options21\.SampleCmpGradientAndBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options21\.ExtendedCommandInfoSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.CooperativeMatrixSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.GDeflateSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.AntiLagSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -271,42 +281,20 @@ jobs:
               (r'(options\.NarrowQuadrilateralLinesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.MismatchingOutputDimensionsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options21\.WorkGraphsTier\s*=\s*)[^;]+;', r'\g<1>D3D12_WORK_GRAPHS_TIER_1_0;'),
-              (r'(options21\.ExecuteIndirectTier\s*=\s*)[^;]+;', r'\g<1>D3D12_EXECUTE_INDIRECT_TIER_1_1;'),
-              (r'(options21\.SampleCmpGradientAndBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options21\.ExtendedCommandInfoSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options14\.IndependentFrontAndBackStencilSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options14\.TriangleFanSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options14\.DynamicDepthBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options15\.TriangleFanSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options15\.DynamicDepthBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options18\.RenderPassesValid\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options19\.MeshShaderSupportsFullRangeRenderTargetArrayIndex\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options19\.AnisoFilterWithPointMipSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options20\.ComputeOnlyWriteWatchSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options20\.RecreateAtTrimSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
           ]
 
-          # === FSYNC + SYNC PERFORMANCE ===
+          # === FSYNC + TIMELINE SEMAPHORE ===
           fsync_patches = [
-              (r'(->use_timeline_semaphore\s*=\s*)false',
-               r'\1true /* FSYNC: force timeline semaphore */'),
-              (r'(->use_win32_fence\s*=\s*)true',
-               r'\1false /* FSYNC: prefer Vulkan timeline sem */'),
-              (r'(#define\s+VKD3D_FENCE_SPIN_COUNT\s+)\d+',
-               r'\g<1>128 /* FSYNC: reduced spin */'),
-              (r'(->shared_timeline_semaphore\s*=\s*)false',
-               r'\1true /* FSYNC: shared timeline for cross-queue */'),
+              (r'(->use_timeline_semaphore\s*=\s*)false', r'\1true'),
+              (r'(->use_win32_fence\s*=\s*)true', r'\1false'),
+              (r'(#define\s+VKD3D_FENCE_SPIN_COUNT\s+)\d+', r'\g<1>128'),
+              (r'(->shared_timeline_semaphore\s*=\s*)false', r'\1true'),
           ]
 
-          # === SUBMISSION + QUEUE PERFORMANCE ===
+          # === SUBMISSION PERFORMANCE ===
           submission_patches = [
-              (r'(->use_batch_submission\s*=\s*)true',
-               r'\1false /* BATCH_SUBMIT_DISABLED */'),
-              (r'(device->queue_timeline_semaphore\s*=\s*)true',
-               r'\1false /* TIMELINE_SEM_FAST */'),
-              (r'(submission_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;',
-               r'\g<1>4; /* MULTI_THREAD_SUBMIT */'),
+              (r'(->use_batch_submission\s*=\s*)true', r'\1false'),
+              (r'(submission_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
           ]
 
           # === DESCRIPTOR LIMITS ===
@@ -321,42 +309,83 @@ jobs:
               (r'(maxPerStageDescriptorUpdateAfterBindStorageImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
           ]
 
-          # === RESIDENCY + PRESENT ===
-          residency_patches = [
-              (r'(d3d12_device_evict_resources\s*\([^)]*\)\s*\{)',
-               r'\1\n    return S_OK; /* RESIDENCY_PERSIST: skip eviction */'),
+          # === MFG X6: SWAPCHAIN DEPTH ===
+          swapchain_patches = [
+              (r'(#define\s+VKD3D_SWAPCHAIN_LATENCY_FRAMES\s+)\d+', r'\g<1>8'),
+              (r'(MaximumFrameLatency\s*<\s*1\s*\|\|\s*MaximumFrameLatency\s*>\s*)\w+', r'\g<1>16'),
+              (r'(frame_latency\s*=\s*min\s*\([^,]+,\s*)\d+(\s*\))', r'\g<1>8\2'),
+              (r'(minImageCount\s*(?<!=)=(?!=)\s*max\s*\(\s*desc\.BufferCount\s*,\s*)(\w+\.minImageCount\s*\))',
+               r'\g<1>max(8u, \2)'),
+              (r'(swapchain->frame_latency\s*=\s*)\d+', r'\g<1>8'),
           ]
 
-          present_patches = [
-              (r'(vkd3d_wait_for_present\s*\([^)]*\)\s*\{)',
-               r'\1\n    return S_OK; /* IMMEDIATE_PRESENT: skip wait */'),
+          # === MFG X6: COMMAND QUEUE DEPTH ===
+          cmdqueue_patches = [
+              (r'(#define\s+VKD3D_QUEUE_DEPTH\s+)\d+', r'\g<1>32'),
+              (r'(pending_submit_count\s*>\s*)\d+', r'\g<1>32'),
           ]
 
-          # === APPLY ALL PATCHES ===
-          patch_file("libs/vkd3d/device.c", gpu + dev)
+          # === RENDER PASS (Tiled GPU - confirmed via upstream PR #2856) ===
+          renderpass_patches = [
+              (r'(->use_render_pass\s*=\s*)false', r'\1true'),
+              (r'(use_render_pass_only\s*(?<!=)=(?!=)\s*)false', r'\1true'),
+              (r'(->render_passes_only\s*=\s*)false', r'\1true'),
+          ]
+
+          # === UMA HOST CACHED (equiv. VKD3D_CONFIG=force_host_cached) ===
+          uma_patches = [
+              (r'(->force_host_cached\s*=\s*)false', r'\1true'),
+              (r'(->host_cached\s*=\s*)false', r'\1true'),
+          ]
+
+          # === SHADER WORKER THREADS ===
+          worker_patches = [
+              (r'(worker_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
+              (r'(shader_worker_threads\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
+              (r'(#define\s+VKD3D_SHADER_WORKER_THREADS\s+)\d+', r'\g<1>4'),
+          ]
+
+          # === PIPELINE CACHE ===
+          cache_patches = [
+              (r'(#define\s+VKD3D_PIPELINE_CACHE_SIZE\s+)\d+', r'\g<1>65536'),
+              (r'(->use_pipeline_cache\s*=\s*)false', r'\1true'),
+          ]
+
+          # === FENCE RECYCLING ===
+          fence_patches = [
+              (r'(->recycle_fences\s*=\s*)false', r'\1true'),
+              (r'(recycle_command_allocators\s*(?<!=)=(?!=)\s*)false', r'\1true'),
+          ]
+
+          # === APPLY PATCHES ===
+          patch_file("libs/vkd3d/device.c", gpu + dev + renderpass_patches + uma_patches)
 
           for root, dirs, files in os.walk("libs/vkd3d"):
               for f in files:
-                  if not f.endswith((".c", ".h")): continue
+                  if not f.endswith((".c", ".h")):
+                      continue
                   path = os.path.join(root, f)
-
                   if f != "device.c" and any(k in f for k in ["adapter", "feature", "caps", "d3d12"]):
                       patch_file(path, gpu)
-
                   patch_file(path, fsync_patches)
                   patch_file(path, submission_patches)
                   patch_file(path, descriptor_patches)
-                  patch_file(path, residency_patches)
-                  patch_file(path, present_patches)
+                  patch_file(path, worker_patches)
+                  patch_file(path, cache_patches)
+                  patch_file(path, fence_patches)
+                  patch_file(path, uma_patches)
+                  patch_file(path, renderpass_patches)
 
-          # === FSYNC HEADER DEFINES ===
+          patch_file("libs/vkd3d/swapchain.c", swapchain_patches)
+          patch_file("libs/vkd3d/command.c", cmdqueue_patches)
+
+          # === HEADER DEFINES ===
           vkd3d_private = "libs/vkd3d/vkd3d_private.h"
           if os.path.exists(vkd3d_private):
               with open(vkd3d_private, "r") as f:
                   content = f.read()
               if "VKD3D_FSYNC_ENABLED" not in content:
-                  fsync_header = """
-          /* === FSYNC + PERFORMANCE DEFINES === */
+                  header = """
           #ifndef VKD3D_FSYNC_ENABLED
           #define VKD3D_FSYNC_ENABLED 1
           #endif
@@ -372,23 +401,24 @@ jobs:
           #ifndef VKD3D_UMA_FORCE_HOST_CACHED
           #define VKD3D_UMA_FORCE_HOST_CACHED 1
           #endif
-          #ifndef VKD3D_PRESENT_IMMEDIATE
-          #define VKD3D_PRESENT_IMMEDIATE 1
+          #ifndef VKD3D_MFG_X6_SWAPCHAIN_DEPTH
+          #define VKD3D_MFG_X6_SWAPCHAIN_DEPTH 8
           #endif
-          /* === END DEFINES === */
+          #ifndef VKD3D_RENDER_PASS_FORCE
+          #define VKD3D_RENDER_PASS_FORCE 1
+          #endif
           """
                   m = re.search(r'(#pragma once|#ifndef\s+\w+\s*\n#define\s+\w+)', content)
                   if m:
                       pos = content.find('\n', m.end()) + 1
-                      content = content[:pos] + fsync_header + content[pos:]
+                      content = content[:pos] + header + content[pos:]
                   else:
-                      content = fsync_header + content
+                      content = header + content
                   with open(vkd3d_private, "w") as f:
                       f.write(content)
                   applied += 1
-                  print("[OK] Fsync header defines injected")
 
-          # === QUEUE TIMELINE OPTIMIZATION ===
+          # === QUEUE TIMELINE FAST PATH ===
           queue_timeline = "libs/vkd3d/queue_timeline.c"
           if os.path.exists(queue_timeline):
               with open(queue_timeline, "r") as f:
@@ -397,7 +427,6 @@ jobs:
                   opt = """
           #include <stdbool.h>
           #include <stdint.h>
-          /* FSYNC_TIMELINE_OPT: fast-path for timeline semaphore waits */
           static inline bool vkd3d_fsync_fence_signaled(uint64_t current, uint64_t target)
           {
               return current >= target;
@@ -407,9 +436,8 @@ jobs:
                   with open(queue_timeline, "w") as f:
                       f.write(content)
                   applied += 1
-                  print("[OK] Fsync timeline optimization injected")
 
-          print(f"Ultra+Fsync | Applied {applied} patches")
+          print(f"Ultra+Fsync+MFG-X6+RenderPass+UMA | Applied {applied} patches")
           if errors:
               print(f"Errors: {len(errors)}")
               for e in errors:
@@ -459,8 +487,8 @@ jobs:
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
-          BUILD_FLAGS="-O3 -DNDEBUG -flto=thin"
-          LINK_FLAGS="-flto=thin -Wl,--icf=safe"
+          BUILD_FLAGS="-O3 -DNDEBUG -flto=thin -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections -mavx -mavx2 -mfma"
+          LINK_FLAGS="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2"
 
           meson setup build-x64 \
             --cross-file ../crossfile-x64.txt \
@@ -515,9 +543,10 @@ jobs:
           cat > pkg/profile.json << JSONEOF
           {
             "type": "VKD3D",
-            "versionName": "${VER}-${COMMIT}",
+            "versionName": "${VER}",
             "versionCode": ${BUILD_DATE},
-            "description": "VKD3D-Proton (UMA + all features + fsync perf)",
+            "buildId": "${VER}-${BUILD_DATE}",
+            "description": "VKD3D-Proton x64/x86 — MFG-X6 + AVX2/FMA + Fsync + RenderPass + UMA",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
@@ -558,33 +587,49 @@ jobs:
           | Vulkan Headers | \`${{ env.VK_HEADERS_TAG }}\` |
           | Architectures | x86_64 + x86 |
 
+          ### MFG X6 Swapchain
+          - VKD3D_SWAPCHAIN_LATENCY_FRAMES raised to 8
+          - SetMaximumFrameLatency cap raised to 16
+          - minImageCount forced to max(8, surface_caps)
+          - frame_latency init raised to 8
+          - Command queue depth raised to 32
+
+          ### Render Pass — Tiled GPU (upstream PR #2856)
+          - force render pass path for clear/resolve ops
+          - render_passes_only enabled
+
+          ### UMA Host Cached Memory
+          - force_host_cached enabled (equiv. VKD3D_CONFIG=force_host_cached)
+          - UMA + CacheCoherentUMA + IsolatedMMU
+
           ### Fsync + Sync Performance
           - Timeline semaphore forced for all fence ops
           - Fence spin count reduced to 128
           - Shared timeline for cross-queue sync
-          - Win32 fence disabled (prefer Vulkan timeline)
+          - Win32 fence disabled
           - Timeline fast-path helper injected
-          - Fsync header defines enabled
 
           ### Submission + Queue Performance
           - Batch submission disabled (lower latency)
           - Multi-thread submission (4 threads)
-          - Immediate present (skip VSync wait)
-          - Memory residency persistence (skip eviction)
+          - Shader worker threads set to 4
+          - Pipeline cache enabled (65536 entries)
+          - Fence + command allocator recycling
+
+          ### Compiler Optimizations
+          - -O3 -flto=thin -ffast-math -fno-finite-math-only
+          - -mavx -mavx2 -mfma (x64 + x86)
+          - -ffunction-sections -fdata-sections
+          - --gc-sections --icf=safe -Wl,-O2
 
           ### D3D12 Features
           - AMD Van Gogh GPU spoof (0x1002:0x163f)
-          - UMA + CacheCoherentUMA + IsolatedMMU
           - Shader Model 6.8 / Feature Level 12_2 / SDK 619
           - D3D12 Options 1-21 all maximized
           - Descriptor limits raised (1M+)
-          - Enhanced barriers + relaxed format casting
           - Ray tracing 1.2 + mesh shaders + VRS tier 2
           - Work graphs 1.0 + execute indirect 1.1
-          - LTO thin optimization
-          - Latest Vulkan + SPIRV headers
 
-  
           [Source](https://github.com/HansKristian-Work/vkd3d-proton)" \
             "${{ env.PKG }}.wcp"
 
