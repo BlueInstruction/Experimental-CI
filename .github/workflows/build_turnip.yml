@@ -184,7 +184,7 @@ jobs:
           case "${{ inputs.mesa_source }}" in
             staging_branch)   ref="${{ inputs.staging_branch }}" ;;
             main_branch|latest_main) ref="main" ;;
-            robclark_branch)  ref="robclark/main" ;;
+            robclark_branch)  ref="drm-msm-next-2026-04-02" ;;
             *)                ref="main" ;;
           esac
           echo "ref=$ref" >> $GITHUB_OUTPUT
@@ -263,11 +263,11 @@ jobs:
       A750_HACK_PRESET: ${{ inputs.a750_hack_preset }}
       CFLAGS_EXTRA: >-
         ${{ inputs.enable_perf == true
-            && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only'
+            && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod+sha2+aes -ffast-math -fno-finite-math-only'
             || '-O2' }}
       CXXFLAGS_EXTRA: >-
         ${{ inputs.enable_perf == true            
-            && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-exceptions'
+            && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod+sha2+aes -ffast-math -fno-finite-math-only -fno-exceptions'
             || '-O2' }}
       LDFLAGS_EXTRA: >-
         ${{ inputs.enable_perf == true
@@ -423,7 +423,7 @@ jobs:
             ${{ inputs.enable_shader_perf == true && '- Shader Compiler Optimizations' || '' }}
             ${{ inputs.enable_a750_autotune == true && '- A750 Dynamic Autotune' || '' }}
             - Patch Preset: `${{ inputs.patch_preset }}`
-            ${{ inputs.a750_hack_preset != 'none' && format('- 🔥 A750 Hacks: {0}', inputs.a750_hack_preset) || '' }}
+            ${{ inputs.a750_hack_preset != 'none' && format('- A750 Hacks: {0}', inputs.a750_hack_preset) || '' }}
 
             ### Dynamic Control via ADB
             ```bash
