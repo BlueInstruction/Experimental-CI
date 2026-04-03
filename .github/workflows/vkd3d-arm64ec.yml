@@ -466,8 +466,8 @@ jobs:
           cpu = 'arm64ec'
           endian = 'little'
           [built-in options]
-          c_link_args = ['-flto=thin', '-Wl,--icf=safe', '-Wl,--gc-sections', '-Wl,-O2', '-lmingwex', '-lmsvcrt', '-lucrt']
-          cpp_link_args = ['-flto=thin', '-Wl,--icf=safe', '-Wl,--gc-sections', '-Wl,-O2', '-lmingwex', '-lmsvcrt', '-lucrt', '-lc++', '-lc++abi', '-lunwind']
+          c_link_args = ['-flto=thin', '-Wl,--icf=safe', '-Wl,--gc-sections', '-Wl,-O2']
+          cpp_link_args = ['-flto=thin', '-Wl,--icf=safe', '-Wl,--gc-sections', '-Wl,-O2']
           EOF
 
           cat > crossfile-x86.txt << 'EOF'
