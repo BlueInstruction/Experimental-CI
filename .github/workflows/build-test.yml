@@ -544,58 +544,6 @@ jobs:
           path: ${{ env.PKG }}.wcp
           retention-days: 30
 
-      - name: Create GitHub Release
-        if: steps.check.outputs.SKIP == 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "${{ env.RELEASE_TAG }}" \
-            --repo "${{ github.repository }}" \
-            --title "VKD3D-Proton ${{ env.VER }} — ${{ env.BUILD_DATE }}" \
-            --notes "## VKD3D-Proton ${{ env.VER }}
-
-          | Property | Value |
-          |----------|-------|
-          | Version | \`${{ env.VER }}\` |
-          | Commit | \`${{ env.COMMIT }}\` |
-          | Build Date | \`${{ env.BUILD_DATE }}\` |
-          | LLVM MinGW | \`${{ steps.llvm.outputs.tag }}\` |
-          | Vulkan Headers | \`${{ env.VK_HEADERS_TAG }}\` |
-          | Architectures | x86_64 + x86 |
-
-          ### MFG X6 Swapchain
-          - VKD3D_SWAPCHAIN_LATENCY_FRAMES raised to 8
-          - SetMaximumFrameLatency cap raised to 16
-          - minImageCount forced to max(8, surface_caps)
-          - frame_latency init raised to 8
-          - Command queue depth raised to 32
-
-          ### Fsync + Sync Performance
-          - Timeline semaphore forced for all fence ops
-          - Fence spin count reduced to 128
-          - Shared timeline for cross-queue sync
-          - Win32 fence disabled (prefer Vulkan timeline)
-          - Timeline fast-path helper injected
-          - Fsync header defines enabled
-
-          ### Submission + Queue Performance
-          - Batch submission disabled (lower latency)
-          - Multi-thread submission (4 threads)
-
-          ### D3D12 Features
-          - AMD Van Gogh GPU spoof (0x1002:0x163f)
-          - UMA + CacheCoherentUMA + IsolatedMMU
-          - Shader Model 6.8 / Feature Level 12_2 / SDK 619
-          - D3D12 Options 1-21 all maximized
-          - Descriptor limits raised (1M+)
-          - Enhanced barriers + relaxed format casting
-          - Ray tracing 1.2 + mesh shaders + VRS tier 2
-          - Work graphs 1.0 + execute indirect 1.1
-          - LTO thin + ICF optimization
-
-          [Source](https://github.com/HansKristian-Work/vkd3d-proton)" \
-            "${{ env.PKG }}.wcp"
-
       - name: Cleanup
         if: always()
         run: rm -rf src out pkg vk-headers spirv-h
