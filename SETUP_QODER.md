@@ -13,7 +13,7 @@ Steps
 
 - See the Qoder docs for installation instructions: https://docs.qoder.com/cli/qoder-action
 - Example (macOS/Linux with npm-installed CLI):
-  npm install -g @qoder/cli
+  npm install -g @qoder-ai/qodercli
 
 2) Run the guided GitHub setup
 
@@ -31,7 +31,7 @@ The guided setup will:
 3) Install the Qoder GitHub App
 
 - On GitHub: Settings → Installed GitHub Apps (or https://github.com/settings/installations)
-- Find the Qoder (QoderAI / qoderai) app and install it for the BlueInstruction/Experimental repository.
+- Find the Qoder (QoderAI / qoderai) app and install it for the BlueInstruction/vkd3d-proton-wcp repository.
 - Grant the app the requested repository permissions (pull-requests, contents, actions as required).
 
 4) Add the repository secret
@@ -44,7 +44,7 @@ Using the GitHub UI:
 - Value: (paste the token)
 
 Using GitHub CLI:
-- gh secret set QODER_PERSONAL_ACCESS_TOKEN --repo BlueInstruction/Experimental --body "$TOKEN"
+- gh secret set QODER_PERSONAL_ACCESS_TOKEN --repo BlueInstruction/vkd3d-proton-wcp --body "$TOKEN"
 
 5) Verify token scopes
 
