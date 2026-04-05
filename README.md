@@ -82,11 +82,6 @@ VKD3D-Proton does not ship DXGI. Inside Winlator, VKD3D and DXVK share a DXGI im
 
 ---
 
-## Environment Variables
-
-The following must be set manually in container settings → **Environment Variables**.
-Variables already present in Winlator's UI (e.g. `WINEESYNC`, `mesa_glthread`) should be configured there and are excluded here.
-
 ### VKD3D-Proton
 
 ```
@@ -131,22 +126,6 @@ BOX64_DYNAREC_FASTNAN=1
 BOX64_DYNAREC_FASTROUND=1
 BOX64_DYNAREC_SAFEFLAGS=1
 ```
-
----
-
-## Variables Available in Winlator UI
-
-Set these inside Winlator's built-in interface, not in the environment variable field:
-
-| Variable | Type | Notes |
-|---|---|---|
-| `TU_DEBUG` | Multi-select | Turnip debug flags |
-| `DXVK_HUD` | Multi-select | Overlay (fps, memory, etc.) |
-| `WINEESYNC` | Checkbox | ESync (0 / 1) |
-| `MESA_SHADER_CACHE_DISABLE` | Checkbox | Disable Mesa shader cache |
-| `mesa_glthread` | Checkbox | GL threading |
-| `FD_DEV_FEATURES` | Multi-select | Freedreno device features |
-| `ZINK_DESCRIPTORS` | Select | Zink descriptor mode |
 
 ---
 
