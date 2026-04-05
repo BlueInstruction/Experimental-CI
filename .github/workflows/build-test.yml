@@ -357,6 +357,16 @@ jobs:
               (r'(recycle_command_allocators\s*(?<!=)=(?!=)\s*)false', r'\1true'),
           ]
 
+          # === RE ENGINE: INTEGER BLEND SANITIZE ===
+          state_patches = [
+              (
+                  r'(?s)ERR\("Enabling blending on RT[^;]+;\s*return\s+E_INVALIDARG\s*;',
+                  'WARN("Force-disabling blending on integer format RT, preventing GPU hang.\\n");\n'
+                  '            rt->BlendEnable = FALSE;\n'
+                  '            rt->RenderTargetWriteMask = 0xf;'
+              ),
+          ]
+
           # === APPLY PATCHES ===
           patch_file("libs/vkd3d/device.c", gpu + dev + renderpass_patches + uma_patches)
 
@@ -378,6 +388,7 @@ jobs:
 
           patch_file("libs/vkd3d/swapchain.c", swapchain_patches)
           patch_file("libs/vkd3d/command.c", cmdqueue_patches)
+          patch_file("libs/vkd3d/state.c", state_patches)
 
           # === HEADER DEFINES ===
           vkd3d_private = "libs/vkd3d/vkd3d_private.h"
