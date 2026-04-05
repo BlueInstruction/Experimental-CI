@@ -1,6 +1,6 @@
 # vkd3d-proton-wcp
 
-Custom builds of [VKD3D-Proton](https://github.com/HansKristian-Work/vkd3d-proton) optimized for Android-based Windows emulation (Winlator, FEXCore/WowBox64).
+Custom builds of [VKD3D-Proton](https://github.com/HansKristian-Work/vkd3d-proton) optimized for Android-based Windows emulation (Winlator, Box64/FEXCore+WowBox64).
 
 ---
 
