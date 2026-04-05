@@ -1,50 +1,37 @@
 # vkd3d-proton-wcp
 
-Custom builds of [VKD3D-Proton](https://github.com/HansKristian-Work/vkd3d-proton) optimized for Android-based Windows emulation (Winlator, Box64/FEXCore+WowBox64).
+Custom builds of [VKD3D-Proton](https://github.com/HansKristian-Work/vkd3d-proton) packaged as `.wcp` files for Winlator.
+Built from upstream with performance patches for Android-based Windows emulation environments.
 
 ---
 
-## Overview
+## Builds
 
-VKD3D-Proton is a Direct3D 12 to Vulkan translation layer used in Proton.
-This repository provides builds tuned for:
-
-- Android emulation environments (Winlator Vanilla/Bionic)
-- Arm64ec hybrid execution via FEXCore
-- Mobile GPU constraints (Adreno 7xx / 8xx, Mesa Turnip)
+| Build | Target | CPU Runtime | Format |
+|---|---|---|---|
+| `vkd3d-proton` | x86_64 | Box64 | `.wcp` |
+| `vkd3d-proton-arm64ec` | ARM64EC + x86_64 hybrid | FEXCore + WowBox64 | `.wcp` |
 
 ---
 
-## Build Targets
+## Installation
 
-| Architecture | Runtime  | Status      |
-|--------------|----------|-------------|
-| Proton Arm64ec + 86 (32-bit)   | FEXCore + WowBox64 |Stable | 
-| Proton x86_64       | Box64    | Stable      |
-
----
-
-## Installation (Winlator)
-
-### Via Winlator Contents Manager (recommended)
-
-1. Download the `.wcp` file from Releases
-2. Open Winlator → **ContentsManager** tab
+1. Download the `.wcp` from [Releases](../../releases)
+2. Open Winlator → **Contents Manager**
 3. Tap **+** → **Import from file** → select the `.wcp`
-4. Open your container settings → **VKD3D** → select the imported version
+4. Open container settings → **DX Wrapper** → set to `DXVK + VKD3D`
+5. Under **VKD3D** → select the imported build
 
-   The spinner displays entries as `{versionCode}`, for example:
+   Entries appear as:
    ```
    3.0b-20260405
    3.0b-20260405-arm64ec
    ```
-5. Tap **Apply**
+6. Tap **Apply**
 
 ---
 
-## WCP File Format
-
-A `.wcp` file is a zstd-compressed tar archive with this structure:
+## WCP Structure
 
 ```
 build.wcp
@@ -57,82 +44,139 @@ build.wcp
     └── d3d12core.dll
 ```
 
-## Driver Requirements
+---
 
-| Requirement                      | Status      |
-|----------------------------------|-------------|
-| Vulkan 1.3                       | Mandatory   |
-| Descriptor indexing (1M+ UAB)    | Mandatory   |
-| `VK_EXT_robustness2`             | Mandatory   |
-| `VK_KHR_push_descriptor`         | Mandatory   |
-| `VK_EXT_descriptor_buffer`       | Recommended |
+## Patches
+
+> Patch list will be documented here.
+
+---
+
+## Required Stack
+
+VKD3D-Proton does not ship DXGI. Inside Winlator, VKD3D and DXVK share a DXGI implementation and must be used together under the **DXVK + VKD3D** DX Wrapper. All components below should be kept up to date for correct behavior.
+
+| Component | Role | Source |
+|---|---|---|
+| **DXVK** | DXGI + D3D9/10/11 translation | [doitsujin/dxvk](https://github.com/doitsujin/dxvk) |
+| **WineProton** | Windows API → POSIX | Winlator Contents Manager |
+| **Box64** | x86_64 → ARM64 (standard containers) | [ptitSeb/box64](https://github.com/ptitSeb/box64) |
+| **FEXCore + WowBox64** | x86_64 + x86 → ARM64 (ARM64EC containers) | [FEX-Emu/FEX](https://github.com/FEX-Emu/FEX) |
+| **Mesa Turnip** | Vulkan driver (Adreno) | Winlator Contents Manager |
+
+---
+
+## Vulkan Requirements
+
+| Requirement | Status |
+|---|---|
+| Vulkan 1.3 | Mandatory |
+| Descriptor indexing (1M+ UpdateAfterBind) | Mandatory |
+| `samplerMirrorClampToEdge` | Mandatory |
+| `shaderDrawParameters` | Mandatory |
+| `VK_EXT_robustness2` | Mandatory |
+| `VK_KHR_push_descriptor` | Mandatory |
+| `VK_EXT_descriptor_buffer` | Recommended |
 | `VK_EXT_mutable_descriptor_type` | Recommended |
-
-Recommended driver: **Mesa Turnip** (latest experimental build for Adreno 7xx/8xx).
+| `VK_EXT_image_view_min_lod` | Recommended |
 
 ---
 
 ## Environment Variables
 
-Winlator has a built-in UI for some variables (`TU_DEBUG`, `DXVK_HUD`, `WINEESYNC`, etc.).
-VKD3D-specific variables are not in the Winlator UI and must be added manually in container settings → **Environment Variables**.
+The following must be set manually in container settings → **Environment Variables**.
+Variables already present in Winlator's UI (e.g. `WINEESYNC`, `mesa_glthread`) should be configured there and are excluded here.
 
-Recommended (add manually):
+### VKD3D-Proton
+
 ```
 VKD3D_CONFIG=dxr,dxr11
+VKD3D_SHADER_MODEL=6_5
 VKD3D_DEBUG=none
-DXVK_LOG_LEVEL=none.
-DXVK_CONFIG_FILE=/dxvk.conf
-```
-
-Optional:
-```
 VKD3D_SWAPCHAIN_PRESENT_MODE=MAILBOX
 VKD3D_FRAME_RATE=0
 ```
 
-Variables available directly in Winlator UI:
+> `VKD3D_SHADER_MODEL=6_5` is preferred over 6_6 for mobile GPU targets. SM 6.6 requires Wave64 and typed UAV atomics not guaranteed across all Adreno revisions.
 
-| Variable               | Type            | Notes                          |
-|------------------------|-----------------|--------------------------------|
-| `TU_DEBUG`             | Multi-select    | Turnip debug flags             |
-| `DXVK_HUD`             | Multi-select    | Overlay (fps, memory, etc.)    |
-| `WINEESYNC`            | Checkbox        | ESync (0 / 1)                  |
-| `MESA_SHADER_CACHE_DISABLE` | Checkbox   | Disable Mesa shader cache      |
-| `mesa_glthread`        | Checkbox        | GL threading                   |
-| `FD_DEV_FEATURES`      | Multi-select    | Freedreno device features      |
-| `ZINK_DESCRIPTORS`     | Select          | Zink descriptor mode           |
+### DXVK
+
+```
+DXVK_LOG_LEVEL=none
+DXVK_ASYNC=1
+DXVK_CONFIG_FILE=/dxvk.conf
+```
+
+### Wine / System
+
+```
+WINE_LARGE_ADDRESS_AWARE=1
+WINEESYNC=1
+vblank_mode=0
+WRAPPER_MAX_IMAGE_COUNT=3
+```
+
+### Mesa / Shader Cache
+
+```
+MESA_DISK_CACHE_SIZE=512
+```
+
+### Box64 (standard containers only)
+
+```
+BOX64_DYNAREC_STRONGMEM=1
+BOX64_DYNAREC_FASTNAN=1
+BOX64_DYNAREC_FASTROUND=1
+BOX64_DYNAREC_SAFEFLAGS=1
+```
 
 ---
 
-## ARM64EC Notes
+## Variables Available in Winlator UI
 
-ARM64EC (Emulation Compatible) enables hybrid execution:
+Set these inside Winlator's built-in interface, not in the environment variable field:
+
+| Variable | Type | Notes |
+|---|---|---|
+| `TU_DEBUG` | Multi-select | Turnip debug flags |
+| `DXVK_HUD` | Multi-select | Overlay (fps, memory, etc.) |
+| `WINEESYNC` | Checkbox | ESync (0 / 1) |
+| `MESA_SHADER_CACHE_DISABLE` | Checkbox | Disable Mesa shader cache |
+| `mesa_glthread` | Checkbox | GL threading |
+| `FD_DEV_FEATURES` | Multi-select | Freedreno device features |
+| `ZINK_DESCRIPTORS` | Select | Zink descriptor mode |
+
+---
+
+## ARM64EC
+
+ARM64EC (Emulation Compatible) is a hybrid execution model used in the `arm64ec` build:
 
 - Native ARM64 code runs at full hardware speed
-- x86_64 code is recompiled at runtime by FEXCore
-- System libraries (Vulkan, Wine, etc.) run natively as ARM64 — no x86 rootfs needed
+- x86_64 code is recompiled in real-time by FEXCore
+- 32-bit (x86) code is handled by WowBox64, which bridges the 32-bit environment inside the 64-bit ARM64EC space, passing instruction translation back to FEXCore
+- System libraries (Vulkan, Wine) run natively — no separate x86 rootfs required
+- Eliminates the CPU bottleneck seen in pure Box64 emulation for DX12-heavy workloads
 
-This eliminates the CPU bottleneck of pure software emulation (Box64) for DX12-heavy workloads.
-
-Build reference: [FEX-Emu ARM64EC wiki](https://wiki.fex-emu.com/index.php/Development:ARM64EC)
+Reference: [FEX-Emu ARM64EC wiki](https://wiki.fex-emu.com/index.php/Development:ARM64EC)
 
 ---
 
 ## Debugging
 
-Enable verbose logging:
+Enable verbose VKD3D logging:
 ```
 VKD3D_DEBUG=warn
 VKD3D_LOG_FILE=/vkd3d.log.txt
 ```
 
-Dump shaders:
+Dump compiled shaders:
 ```
 VKD3D_SHADER_DUMP_PATH=/storage/emulated/0/vkd3d-dumps
 ```
 
-Disable problematic extensions:
+Disable a problematic Vulkan extension:
 ```
 VKD3D_DISABLE_EXTENSIONS=VK_EXT_descriptor_buffer
 ```
@@ -142,24 +186,17 @@ Disable shader cache:
 VKD3D_SHADER_CACHE_PATH=0
 ```
 
----
-
-## Recommended Stack
-
-| Component | Version          |
-|-----------|------------------|
-| WineProton      | Latest Arm64ec + x86_64 build    |
-| FEXCore   | Latest stable    |
-| Turnip    | Latest (Gen8+)   |
-| DXVK      | Latest           |
-| Winlator Bionic  | Vanilla / Ludashi |
+Enable GPU breadcrumb crash logging (requires `VK_AMD_buffer_marker` or `VK_NV_device_checkpoints`):
+```
+VKD3D_CONFIG=breadcrumbs
+```
 
 ---
 
 ## Credits
 
-- [HansKristian-Work/vkd3d-proton](https://github.com/HansKristian-Work/vkd3d-proton) — upstream
-- [Mesa / Turnip](https://gitlab.freedesktop.org/mesa/mesa) — Vulkan driver
-- [FEX-Emu](https://github.com/FEX-Emu/FEX) — ARM64EC runtime
-- [WinlatorCMOD](https://github.com/StevenMXZ/Winlator-Ludashi) — Android container
-  
+- [HansKristian-Work/vkd3d-proton](https://github.com/HansKristian-Work/vkd3d-proton) — upstream VKD3D-Proton
+- [doitsujin/dxvk](https://github.com/doitsujin/dxvk) — DXVK / shared DXGI
+- [ptitSeb/box64](https://github.com/ptitSeb/box64) — x86_64 CPU runtime
+- [FEX-Emu/FEX](https://github.com/FEX-Emu/FEX) — ARM64EC CPU runtime
+- [StevenMXZ/Winlator-Ludashi](https://github.com/StevenMXZ/Winlator-Ludashi) — Winlator fork
