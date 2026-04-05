@@ -361,7 +361,7 @@ jobs:
           state_patches = [
               (
                   r'(?s)ERR\("Enabling blending on RT[^;]+;\s*return\s+E_INVALIDARG\s*;',
-                  'WARN("Force-disabling blending on integer format RT, preventing GPU hang.\\n");\n'
+                  'WARN("Force-disabling blending on integer format RT, preventing GPU hang.\\\\n");\n'
                   '            rt->BlendEnable = FALSE;\n'
                   '            rt->RenderTargetWriteMask = 0xf;'
               ),
