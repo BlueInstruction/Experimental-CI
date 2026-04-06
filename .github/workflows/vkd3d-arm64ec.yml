@@ -1,4 +1,4 @@
-name: Vkd3d Proton Arm64ec
+name: Vkd3d Proton Arm64ec Test
 
 on:
   schedule:
@@ -426,7 +426,7 @@ jobs:
               with open(queue_timeline, "r") as f:
                   content = f.read()
               if "FSYNC_TIMELINE_OPT" not in content:
-              opt = """
+                  opt = """
               /* FSYNC_TIMELINE_OPT */
           #include <stdbool.h>
           #include <stdint.h>
@@ -627,6 +627,7 @@ jobs:
   
           [Source](https://github.com/HansKristian-Work/vkd3d-proton)" \
             "${{ env.PKG }}.wcp"
+            
       - name: Cleanup
         if: always()
         run: rm -rf src out pkg vk-headers spirv-h
