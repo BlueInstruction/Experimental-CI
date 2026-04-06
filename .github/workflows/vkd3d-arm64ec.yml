@@ -426,7 +426,7 @@ jobs:
               with open(queue_timeline, "r") as f:
                   content = f.read()
               if "FSYNC_TIMELINE_OPT" not in content:
-              opt = """
+                  opt = """
               /* FSYNC_TIMELINE_OPT */
           #include <stdbool.h>
           #include <stdint.h>
@@ -585,7 +585,7 @@ jobs:
           {
             "type": "VKD3D",
             "versionName": "${VER}-arm64ec",
-            "versionCode": ${BUILD_DATE}-arm64ec,
+            "versionCode": ${BUILD_DATE},
             "description": "VKD3D-Proton Arm64ec — (FEX/WowBox64)",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
@@ -627,6 +627,7 @@ jobs:
   
           [Source](https://github.com/HansKristian-Work/vkd3d-proton)" \
             "${{ env.PKG }}.wcp"
+            
       - name: Cleanup
         if: always()
         run: rm -rf src out pkg vk-headers spirv-h
