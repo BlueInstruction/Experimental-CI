@@ -349,135 +349,77 @@ apply_a750_win_identity() {
 import sys, re
 
 path = sys.argv[1]
-with open(path, "r") as f:
+with open(path, 'r') as f:
     content = f.read()
-
-injection = """
-   if (TU_DEBUG(DECK_EMU)) {
-      p->driverID = VK_DRIVER_ID_QUALCOMM_PROPRIETARY;
-      memset(p->driverName, 0, sizeof(p->driverName));
-      snprintf(p->driverName, VK_MAX_DRIVER_NAME_SIZE, "Qualcomm");
-      memset(p->driverInfo, 0, sizeof(p->driverInfo));
-      snprintf(p->driverInfo, VK_MAX_DRIVER_INFO_SIZE, "Mesa (spoofed)");
-      p->vendorID = 0x5143;
-      p->deviceID = 0x43a;
-      memset(p->deviceName, 0, sizeof(p->deviceName));
-      snprintf(p->deviceName, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE, "Adreno (TM) 750");
-   }
-"""
-
-injected = False
-
-m = re.search(r'(\n[ \t]*p->denormBehaviorIndependence\s*=)', content)
-if m:
-    content = content[:m.start()] + "\n" + injection + content[m.start():]
-    print("[OK] identity injection applied (denorm anchor)")
-    injected = True
-
-if not injected:
-    func_m = re.search(r'tu_get_physical_device_properties_1_2\s*\([^)]*\)\s*\{', content)
-    if func_m:
-        start = func_m.end()
-        depth = 1
-        pos = start
-        while pos < len(content) and depth > 0:
-            if content[pos] == '{': depth += 1
-            elif content[pos] == '}': depth -= 1
-            pos += 1
-        insert_at = pos - 1
-        content = content[:insert_at] + "\n" + injection + content[insert_at:]
-        print("[OK] identity injection applied (brace-counting)")
-        injected = True
-
-if not injected:
-    print("[WARN] could not find injection point in tu_device.cc")
-
-with open(path, "w") as f:
-    f.write(content)
-PYEOF
-        log_success "A750 Windows identity applied"
-    else
-        log_warn "identity: already applied or tu_device.cc not found"
-    fi
-}
-
-apply_a750_win_profile() {
-    log_info "Applying Adreno 750 Windows profile (apiVersion 1.3.295 + 20 GiB heap)"
-    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
-    [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found"; return 0; }
-
-    if grep -q "A750_WIN_PROFILE" "$tu_device_cc" 2>/dev/null; then
-        log_warn "A750 Windows profile already applied"
-        return 0
-    fi
-
-    python3 - "$tu_device_cc" << 'PYEOF'
-import sys, re
-
-path = sys.argv[1]
-with open(path, "r") as f:
-    content = f.read()
-
-api_injection = """
-   if (TU_DEBUG(DECK_EMU)) {
-      /* A750_WIN_PROFILE: apiVersion matches Windows driver 512.819.2 */
-      pdevice->vk.properties.apiVersion = VK_MAKE_API_VERSION(0, 1, 3, 295);
-   }
-"""
-
-heap_injection = """
-   if (TU_DEBUG(DECK_EMU)) {
-      /* A750_WIN_PROFILE: 20 GiB heap matching Windows x86_64 driver */
-      if (pMemoryProperties->memoryHeapCount > 0)
-         pMemoryProperties->memoryHeaps[0].size = 0x4FF000000ULL;
-   }
-"""
 
 applied = 0
 
+# ── apiVersion ─────────────────────────────────────────────────────
 m_api = re.search(r'(\n[ \t]*pdevice->vk\.properties\.apiVersion\s*=)', content)
 if m_api:
-    content = content[:m_api.start()] + "\n" + api_injection + content[m_api.start():]
-    print("[OK] apiVersion 1.3.295 injection applied")
+    api_code = '\n   if (TU_DEBUG(DECK_EMU)) {\n      /* A750_WIN_PROFILE: apiVersion 1.3.295 */\n      pdevice->vk.properties.apiVersion = VK_MAKE_API_VERSION(0, 1, 3, 295);\n   }\n'
+    content = content[:m_api.start()] + '\n' + api_code + content[m_api.start():]
+    print('[OK] apiVersion 1.3.295 injected (pdevice anchor)')
     applied += 1
 else:
-    m_api2 = re.search(r'(tu_GetPhysicalDeviceProperties2\s*\([^{]*\{)', content, re.DOTALL)
+    m_api2 = re.search(r'VK_MAKE_API_VERSION\(0,\s*1,\s*3,\s*\d+\)', content)
     if m_api2:
-        bp = content.find('{', m_api2.start())
-        if bp != -1:
-            content = content[:bp+1] + "\n" + api_injection + content[bp+1:]
-            print("[OK] apiVersion injection applied (function entry)")
-            applied += 1
-    if applied == 0:
-        print("[WARN] apiVersion injection point not found")
+        ln_end = content.find('\n', m_api2.end())
+        if ln_end == -1: ln_end = len(content)
+        api_code = '\n   if (TU_DEBUG(DECK_EMU)) {\n      /* A750_WIN_PROFILE: apiVersion 1.3.295 */\n      pdevice->vk.properties.apiVersion = VK_MAKE_API_VERSION(0, 1, 3, 295);\n   }\n'
+        content = content[:ln_end] + '\n' + api_code + content[ln_end:]
+        print('[OK] apiVersion 1.3.295 injected (VK_MAKE anchor)')
+        applied += 1
+    else:
+        print('[WARN] apiVersion injection point not found')
 
-m_heap = None
+# ── 20 GiB heap — extract actual param name dynamically ───────────
+heap_injected = False
 for pat in [
-    r'(tu_GetPhysicalDeviceMemoryProperties2\s*\([^{]*\{)',
-    r'(vkGetPhysicalDeviceMemoryProperties2\s*\([^{]*\{)',
+    r'tu_GetPhysicalDeviceMemoryProperties2\s*\(\s*VkPhysicalDevice\s+\w+\s*,\s*VkPhysicalDeviceMemoryProperties2\s*\*\s*(\w+)\s*\)',
+    r'vkGetPhysicalDeviceMemoryProperties2\s*\(\s*VkPhysicalDevice\s+\w+\s*,\s*VkPhysicalDeviceMemoryProperties2\s*\*\s*(\w+)\s*\)',
 ]:
-    m_heap = re.search(pat, content, re.DOTALL)
-    if m_heap:
-        break
+    m_func = re.search(pat, content)
+    if m_func:
+        param = m_func.group(1)
+        bp = content.find('{', m_func.end())
+        if bp != -1:
+            close = bp + 1
+            depth = 1
+            while close < len(content) and depth > 0:
+                if content[close] == '{': depth += 1
+                elif content[close] == '}': depth -= 1
+                close += 1
+            insert_at = close - 1
+            heap_code = (
+                '\n   if (TU_DEBUG(DECK_EMU)) {\n'
+                '      /* A750_WIN_PROFILE: 20 GiB heap */\n'
+                f'      if ({param}->memoryProperties.memoryHeapCount > 0)\n'
+                f'         {param}->memoryProperties.memoryHeaps[0].size = 0x4FF000000ULL;\n'
+                '   }\n'
+            )
+            content = content[:insert_at] + '\n' + heap_code + content[insert_at:]
+            print(f'[OK] 20 GiB heap injected (param={param})')
+            applied += 1
+            heap_injected = True
+            break
 
-if m_heap:
-    bp = content.find('{', m_heap.start())
-    close = bp + 1
-    depth = 1
-    while close < len(content) and depth > 0:
-        if content[close] == '{': depth += 1
-        elif content[close] == '}': depth -= 1
-        close += 1
-    insert_at = close - 1
-    content = content[:insert_at] + "\n" + heap_injection + content[insert_at:]
-    print("[OK] heap size 20 GiB injection applied")
-    applied += 1
-else:
-    print("[WARN] heap injection point not found")
+if not heap_injected:
+    # Fallback: find any memoryHeaps[0].size assignment
+    m_hs = re.search(r'(\n[ \t]*.*memoryHeaps\[0\]\.size\s*=[^;]+;)', content)
+    if m_hs:
+        ln_end = content.find('\n', m_hs.end())
+        if ln_end == -1: ln_end = len(content)
+        heap_code = '\n   if (TU_DEBUG(DECK_EMU)) {\n      /* A750_WIN_PROFILE: 20 GiB heap fallback */\n      pdevice->memory.memoryProperties.memoryHeaps[0].size = 0x4FF000000ULL;\n   }\n'
+        content = content[:ln_end] + '\n' + heap_code + content[ln_end:]
+        print('[OK] 20 GiB heap injected (fallback after memoryHeaps assignment)')
+        applied += 1
+    else:
+        print('[WARN] 20 GiB heap injection point not found')
 
-with open(path, "w") as f:
+with open(path, 'w') as f:
     f.write(content)
-print(f"[OK] A750 Windows profile: {applied} injections applied")
+print(f'[OK] A750 Windows profile: {applied} injections applied')
 PYEOF
 
     log_success "Adreno 750 Windows profile applied"
@@ -685,20 +627,100 @@ with open(tu_path) as f: content = f.read()
 with open(vk_path) as f: vk_py = f.read()
 
 INST_ONLY = {
-    "VK_KHR_surface", "VK_KHR_android_surface", "VK_KHR_display",
-    "VK_KHR_get_surface_capabilities2", "VK_KHR_portability_enumeration",
-    "VK_EXT_debug_report", "VK_EXT_debug_utils", "VK_EXT_headless_surface",
-    "VK_EXT_layer_settings", "VK_EXT_swapchain_colorspace",
+    "VK_KHR_surface","VK_KHR_android_surface","VK_KHR_display",
+    "VK_KHR_get_surface_capabilities2","VK_KHR_portability_enumeration",
+    "VK_EXT_debug_report","VK_EXT_debug_utils","VK_EXT_headless_surface",
+    "VK_EXT_layer_settings","VK_EXT_swapchain_colorspace",
     "VK_GOOGLE_surfaceless_query",
 }
 
-all_exts = re.findall(r'"(VK_[A-Z0-9_]+)"\s*:\s*\d+', vk_py)
-dev_exts = [e for e in all_exts if e not in INST_ONLY]
+# ── Read extensions from vk_extensions.py (multi-format) ─────────────
+A750_CORE = [
+    "VK_ANDROID_external_memory_android_hardware_buffer",
+    "VK_EXT_4444_formats","VK_EXT_astc_decode_mode","VK_EXT_blend_operation_advanced",
+    "VK_EXT_border_color_swizzle","VK_EXT_calibrated_timestamps",
+    "VK_EXT_color_write_enable","VK_EXT_conditional_rendering",
+    "VK_EXT_conservative_rasterization","VK_EXT_custom_border_color",
+    "VK_EXT_depth_clamp_zero_one","VK_EXT_depth_clip_control","VK_EXT_depth_clip_enable",
+    "VK_EXT_descriptor_indexing","VK_EXT_device_address_binding_report",
+    "VK_EXT_device_fault","VK_EXT_device_memory_report",
+    "VK_EXT_extended_dynamic_state","VK_EXT_extended_dynamic_state2",
+    "VK_EXT_filter_cubic","VK_EXT_fragment_density_map","VK_EXT_fragment_density_map2",
+    "VK_EXT_global_priority","VK_EXT_global_priority_query","VK_EXT_host_query_reset",
+    "VK_EXT_image_2d_view_of_3d","VK_EXT_image_robustness","VK_EXT_image_view_min_lod",
+    "VK_EXT_index_type_uint8","VK_EXT_inline_uniform_block","VK_EXT_line_rasterization",
+    "VK_EXT_load_store_op_none","VK_EXT_multisampled_render_to_single_sampled",
+    "VK_EXT_multi_draw","VK_EXT_mutable_descriptor_type",
+    "VK_EXT_pipeline_creation_cache_control","VK_EXT_pipeline_creation_feedback",
+    "VK_EXT_pipeline_protected_access","VK_EXT_pipeline_robustness",
+    "VK_EXT_primitive_topology_list_restart","VK_EXT_private_data",
+    "VK_EXT_provoking_vertex","VK_EXT_queue_family_foreign","VK_EXT_robustness2",
+    "VK_EXT_sample_locations","VK_EXT_sampler_filter_minmax","VK_EXT_scalar_block_layout",
+    "VK_EXT_separate_stencil_usage","VK_EXT_shader_atomic_float",
+    "VK_EXT_shader_demote_to_helper_invocation","VK_EXT_shader_image_atomic_int64",
+    "VK_EXT_shader_module_identifier","VK_EXT_shader_stencil_export",
+    "VK_EXT_shader_viewport_index_layer","VK_EXT_subgroup_size_control",
+    "VK_EXT_swapchain_maintenance1","VK_EXT_texel_buffer_alignment",
+    "VK_EXT_texture_compression_astc_hdr","VK_EXT_tooling_info",
+    "VK_EXT_transform_feedback","VK_EXT_vertex_attribute_divisor",
+    "VK_EXT_vertex_input_dynamic_state","VK_IMG_filter_cubic",
+    "VK_KHR_16bit_storage","VK_KHR_8bit_storage","VK_KHR_acceleration_structure",
+    "VK_KHR_bind_memory2","VK_KHR_buffer_device_address","VK_KHR_calibrated_timestamps",
+    "VK_KHR_copy_commands2","VK_KHR_create_renderpass2","VK_KHR_dedicated_allocation",
+    "VK_KHR_deferred_host_operations","VK_KHR_depth_stencil_resolve",
+    "VK_KHR_descriptor_update_template","VK_KHR_device_group","VK_KHR_draw_indirect_count",
+    "VK_KHR_driver_properties","VK_KHR_dynamic_rendering","VK_KHR_dynamic_rendering_local_read",
+    "VK_KHR_external_fence","VK_KHR_external_fence_fd","VK_KHR_external_memory",
+    "VK_KHR_external_memory_fd","VK_KHR_external_semaphore","VK_KHR_external_semaphore_fd",
+    "VK_KHR_format_feature_flags2","VK_KHR_fragment_shading_rate",
+    "VK_KHR_get_memory_requirements2","VK_KHR_global_priority","VK_KHR_image_format_list",
+    "VK_KHR_imageless_framebuffer","VK_KHR_incremental_present","VK_KHR_index_type_uint8",
+    "VK_KHR_line_rasterization","VK_KHR_load_store_op_none",
+    "VK_KHR_maintenance1","VK_KHR_maintenance2","VK_KHR_maintenance3","VK_KHR_maintenance4",
+    "VK_KHR_maintenance5","VK_KHR_maintenance6","VK_KHR_maintenance7","VK_KHR_map_memory2",
+    "VK_KHR_multiview","VK_KHR_pipeline_executable_properties",
+    "VK_KHR_present_id","VK_KHR_present_wait","VK_KHR_push_descriptor","VK_KHR_ray_query",
+    "VK_KHR_ray_tracing_maintenance1","VK_KHR_ray_tracing_position_fetch",
+    "VK_KHR_relaxed_block_layout","VK_KHR_sampler_mirror_clamp_to_edge",
+    "VK_KHR_sampler_ycbcr_conversion","VK_KHR_separate_depth_stencil_layouts",
+    "VK_KHR_shader_atomic_int64","VK_KHR_shader_clock","VK_KHR_shader_draw_parameters",
+    "VK_KHR_shader_expect_assume","VK_KHR_shader_float16_int8","VK_KHR_shader_float_controls",
+    "VK_KHR_shader_float_controls2","VK_KHR_shader_integer_dot_product",
+    "VK_KHR_shader_maximal_reconvergence","VK_KHR_shader_non_semantic_info",
+    "VK_KHR_shader_quad_control","VK_KHR_shader_subgroup_extended_types",
+    "VK_KHR_shader_subgroup_rotate","VK_KHR_shader_subgroup_uniform_control_flow",
+    "VK_KHR_shader_terminate_invocation","VK_KHR_spirv_1_4",
+    "VK_KHR_storage_buffer_storage_class","VK_KHR_swapchain","VK_KHR_swapchain_mutable_format",
+    "VK_KHR_synchronization2","VK_KHR_timeline_semaphore","VK_KHR_uniform_buffer_standard_layout",
+    "VK_KHR_variable_pointers","VK_KHR_vertex_attribute_divisor","VK_KHR_vulkan_memory_model",
+    "VK_KHR_workgroup_memory_explicit_layout","VK_KHR_zero_initialize_workgroup_memory",
+    "VK_NV_optical_flow",
+    "VK_QCOM_fragment_density_map_offset","VK_QCOM_image_processing",
+    "VK_QCOM_multiview_per_view_render_areas","VK_QCOM_multiview_per_view_viewports",
+    "VK_QCOM_render_pass_shader_resolve","VK_QCOM_render_pass_store_ops",
+    "VK_QCOM_render_pass_transform","VK_QCOM_rotated_copy_commands",
+    "VK_QCOM_tile_properties","VK_QCOM_queue_perf_hint",
+]
+
+try:
+    with open(vk_path) as f: vk_py = f.read()
+    from_file = (
+        re.findall(r'"(VK_[A-Z0-9_]+)"\s*:\s*\d+', vk_py) +
+        re.findall(r"'(VK_[A-Z0-9_]+)'\s*:\s*\d+", vk_py) +
+        re.findall(r"Extension\(['\"]+(VK_[A-Z0-9_]+)['\"]", vk_py)
+    )
+except Exception as ex:
+    from_file = []
+    print(f"[WARN] vk_extensions.py read error: {ex}")
+
+merged = list(dict.fromkeys(from_file + A750_CORE))
+dev_exts = [e for e in merged if e not in INST_ONLY]
 print(f"[INFO] {len(dev_exts)} device extensions to inject")
 
 def find_point(text):
     for pat in [
         r'tu_get_device_extensions\s*\([^{]*?struct\s+vk_device_extension_table\s*\*\s*(\w+)',
+        r'tu_fill_device_extensions\s*\([^{]*?struct\s+vk_device_extension_table\s*\*\s*(\w+)',
         r'vk_device_extension_table\s*\*\s*(\w+)\s*[,\)]',
     ]:
         m = re.search(pat, text, re.DOTALL)
@@ -715,7 +737,7 @@ def find_point(text):
             return ev, p - 1
     last = None
     for m in re.finditer(
-        r'(\w+)->(KHR|EXT|QCOM|MESA|NV|INTEL|IMG|ANDROID)\w+\s*=\s*(?:true|false)\s*;',
+        r'(\w+)->(KHR|EXT|QCOM|MESA|NV|INTEL|IMG|ANDROID|ARM|VALVE|GOOGLE)\w+\s*=\s*(?:true|false)\s*;',
         text
     ):
         last = m
@@ -724,20 +746,20 @@ def find_point(text):
 
 r = find_point(content)
 if r is None:
-    print("[WARN] No injection point found")
+    print("[WARN] No extension injection point found in tu_device.cc")
     with open(tu_path, 'w') as f: f.write(content)
     sys.exit(0)
 
 ev, ins = r
+print(f"[OK] injection point: var='{ev}'")
 lines = ["\n    // === A750 WINDOWS EXTENSIONS ==="]
 for e in dev_exts:
     lines.append(f"    {ev}->{e[3:]} = true;")
-lines.append("    // === END ===\n")
+lines.append("    // === END A750 ===\n")
 inj = "\n".join(lines)
 content = content[:ins] + inj + content[ins:]
 with open(tu_path, 'w') as f: f.write(content)
 print(f"[OK] {len(dev_exts)} extension assignments written")
-PYEOF
 
     log_success "Vulkan extensions support applied"
 }
