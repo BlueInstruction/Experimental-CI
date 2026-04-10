@@ -395,7 +395,7 @@ for pat in [
                 '\n   if (TU_DEBUG(DECK_EMU)) {\n'
                 '      /* A750_WIN_PROFILE: 20 GiB heap */\n'
                 f'      if ({param}->memoryProperties.memoryHeapCount > 0)\n'
-                f'         {param}->memoryProperties.memoryHeaps[0].size = 0x4FF000000ULL;\n'
+                f'         {param}->memoryProperties.memoryHeaps[0].size = 20479ULL * 1024ULL * 1024ULL;\n'
                 '   }\n'
             )
             content = content[:insert_at] + '\n' + heap_code + content[insert_at:]
@@ -410,7 +410,7 @@ if not heap_injected:
     if m_hs:
         ln_end = content.find('\n', m_hs.end())
         if ln_end == -1: ln_end = len(content)
-        heap_code = '\n   if (TU_DEBUG(DECK_EMU)) {\n      /* A750_WIN_PROFILE: 20 GiB heap fallback */\n      pdevice->memory.memoryProperties.memoryHeaps[0].size = 0x4FF000000ULL;\n   }\n'
+        heap_code = '\n   if (TU_DEBUG(DECK_EMU)) {\n      /* A750_WIN_PROFILE: 20 GiB heap fallback */\n      pdevice->memory.memoryProperties.memoryHeaps[0].size = 20479ULL * 1024ULL * 1024ULL;\n   }\n'
         content = content[:ln_end] + '\n' + heap_code + content[ln_end:]
         print('[OK] 20 GiB heap injected (fallback after memoryHeaps assignment)')
         applied += 1
@@ -421,6 +421,8 @@ with open(path, 'w') as f:
     f.write(content)
 print(f'[OK] A750 Windows profile: {applied} injections applied')
 PYEOF
+
+    fi
 
     log_success "Adreno 750 Windows profile applied"
 }
@@ -600,11 +602,22 @@ known = set(re.findall(r'"(VK_[A-Z0-9_]+)"', c))
 adds = [f'    "{e}": 1,' for e in A750_WIN if e not in known]
 if adds:
     injected = False
-    for probe in ['"VK_KHR_swapchain": 1,', '"VK_KHR_swapchain":', '"VK_ANDROID_native_buffer":']:
+    # Exact full-entry probe (safe to split after)
+    for probe in ['"VK_KHR_swapchain": 1,']:
         if probe in c:
             c = c.replace(probe, probe + '\n' + '\n'.join(adds), 1)
             injected = True
             break
+    # Broader probes: insert after the full line to avoid splitting dict entries
+    if not injected:
+        for probe in ['"VK_KHR_swapchain":', '"VK_ANDROID_native_buffer":']:
+            idx = c.find(probe)
+            if idx != -1:
+                eol = c.find('\n', idx)
+                if eol == -1: eol = len(c)
+                c = c[:eol] + '\n' + '\n'.join(adds) + c[eol:]
+                injected = True
+                break
     if not injected:
         m2 = list(re.finditer(r'\n(\s*\}\s*)$', c))
         if m2:
@@ -760,6 +773,7 @@ inj = "\n".join(lines)
 content = content[:ins] + inj + content[ins:]
 with open(tu_path, 'w') as f: f.write(content)
 print(f"[OK] {len(dev_exts)} extension assignments written")
+PYEOF
 
     log_success "Vulkan extensions support applied"
 }
@@ -781,7 +795,6 @@ apply_patches() {
         apply_gralloc_ubwc_fix
         if [[ "$ENABLE_DECK_EMU" == "true" ]]; then
             apply_a750_win_identity
-            apply_a750_win_profile
         fi
         apply_vulkan_extensions_support
     fi
@@ -965,11 +978,12 @@ package_driver() {
     cat > "${pkg_dir}/meta.json" << EOF
 {
     "schemaVersion": 1,
-    "name": "Turnip A750 Windows Profile",
+    "name": "Turnip A750 Windows-${build_date}"
+    ",
     "description": "Adreno 750 — Windows x86_64 identity",
     "author": "BlueInstruction",
     "packageVersion": "1",
-    "vendor": "Mess",
+    "vendor": "Mesa",
     "driverVersion": "${vulkan_version}",
     "minApi": 28,
     "libraryName": "${driver_name}"
@@ -1016,7 +1030,7 @@ print_summary() {
 }
 
 main() {
-    log_info "Turnip Driver Builder — Adreno 750 Windows Profile"
+    log_info "Turnip Driver Builder — Adreno 750 Windows-${build_date}"
     log_info "Variant: $BUILD_VARIANT | Source: $MESA_SOURCE"
 
     check_deps
