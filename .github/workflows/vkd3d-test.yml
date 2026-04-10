@@ -60,9 +60,9 @@ jobs:
             VER="${{ inputs.VERSION }}"
             [[ "$VER" =~ ^v ]] || VER="v$VER"
           else
-            VER=$(curl -fsSL https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest \
+            VER=$(curl -sSL https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest \
               | jq -r '.tag_name // empty')
-            [[ -z "$VER" ]] && VER=$(curl -fsSL \
+            [[ -z "$VER" ]] && VER=$(curl -sSL \
               https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases \
               | jq -r '.[0].tag_name')
           fi
@@ -75,9 +75,9 @@ jobs:
               "https://api.github.com/repos/${{ github.repository }}/releases/tags/${RELEASE_TAG}")
             [[ "$HTTP" == "200" ]] && SKIP="true"
           fi
-          echo "skip=$SKIP"        >> $GITHUB_OUTPUT
-          echo "ver=$VER_CLEAN"    >> $GITHUB_OUTPUT
-          echo "tag=$VER"          >> $GITHUB_OUTPUT
+          echo "skip=$SKIP"               >> $GITHUB_OUTPUT
+          echo "ver=$VER_CLEAN"           >> $GITHUB_OUTPUT
+          echo "tag=$VER"                 >> $GITHUB_OUTPUT
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
           echo "build_date=$BUILD_DATE"   >> $GITHUB_OUTPUT
 
@@ -108,11 +108,10 @@ jobs:
         run: |
           VENV="${GITHUB_WORKSPACE}/.venv"
           python3 -m venv "$VENV"
-          . "$VENV/bin/activate"
-          pip install --upgrade pip
-          pip install "meson>=1.3.0"
+          "$VENV/bin/pip" install --upgrade pip
+          "$VENV/bin/pip" install "meson>=1.3.0"
           echo "PATH=$VENV/bin:${PATH}" >> "$GITHUB_ENV"
-          meson --version
+          "$VENV/bin/meson" --version
 
       - name: Detect LLVM MinGW
         id: llvm
@@ -120,7 +119,7 @@ jobs:
           if [[ -n "${{ inputs.LLVM_TAG }}" ]]; then
             LLVM_TAG="${{ inputs.LLVM_TAG }}"
           else
-            LLVM_TAG=$(curl -fsSL \
+            LLVM_TAG=$(curl -sSL \
               https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest \
               | jq -r '.tag_name // empty')
             [[ -z "$LLVM_TAG" ]] && LLVM_TAG="20251104"
@@ -150,10 +149,10 @@ jobs:
             done
             return 1
           }
-          JSON=$(curl -fsSL https://api.github.com/repos/mstorsjo/llvm-mingw/releases/tags/$LTAG || true)
+          JSON=$(curl -sSL https://api.github.com/repos/mstorsjo/llvm-mingw/releases/tags/$LTAG || true)
           URL=$(pick_url "$JSON" || true)
           if [[ -z "${URL:-}" ]]; then
-            JSON=$(curl -fsSL https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest)
+            JSON=$(curl -sSL https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest)
             URL=$(pick_url "$JSON")
           fi
           sudo mkdir -p $TOOLCHAIN_DIR
@@ -178,9 +177,10 @@ jobs:
 
       - name: Update Vulkan + SPIRV Headers
         run: |
-          VK_TAG=$(curl -fsSL \
+          VK_TAG=$(curl -sSL \
             https://api.github.com/repos/KhronosGroup/Vulkan-Headers/releases/latest \
-            | jq -r '.tag_name // "main"')
+            | jq -r '.tag_name // empty')
+          [[ -z "$VK_TAG" ]] && VK_TAG="main"
           echo "VK_HEADERS_TAG=$VK_TAG" >> $GITHUB_ENV
           git clone --depth 1 --branch "$VK_TAG" \
             https://github.com/KhronosGroup/Vulkan-Headers.git vk-headers 2>/dev/null || \
@@ -189,7 +189,7 @@ jobs:
           [[ -d vk-headers/registry ]] && { mkdir -p src/registry; cp -f vk-headers/registry/vk.xml src/registry/ 2>/dev/null || true; }
           rm -rf vk-headers
 
-          SPIRV_TAG=$(curl -fsSL \
+          SPIRV_TAG=$(curl -sSL \
             https://api.github.com/repos/KhronosGroup/SPIRV-Headers/releases/latest \
             | jq -r '.tag_name // empty')
           if [[ -n "$SPIRV_TAG" ]]; then
@@ -231,19 +231,19 @@ jobs:
                       errors.append(f"Write error {path}: {e}")
 
           gpu = [
-              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x1002;'),
-              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x163f;'),
-              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
-              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>16384ULL * 1024 * 1024;'),
+              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x5143;'),
+              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x43a;'),
+              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>20479ULL * 1024 * 1024;'),
+              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096ULL * 1024 * 1024;'),
           ]
 
           dev = [
               (r'(\.UMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(\.CacheCoherentUMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(\.IsolatedMMU\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_6;'),
-              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_6;'),
-              (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\g<1>D3D_FEATURE_LEVEL_12_1;'),
+              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_7;'),
+              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_7;'),
+              (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\g<1>D3D_FEATURE_LEVEL_12_2;'),
               (r'(D3D12SDKVersion\s*=\s*)[^;]+;', r'\g<1>613;'),
               (r'(options1\.WaveOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options1\.WaveLaneCountMin\s*=\s*)[^;]+;', r'\g<1>64;'),
@@ -254,22 +254,24 @@ jobs:
               (r'(options2\.ProgrammableSamplePositionsTier\s*=\s*)[^;]+;', r'\g<1>D3D12_PROGRAMMABLE_SAMPLE_POSITIONS_TIER_2;'),
               (r'(options3\.BarycentricsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options3\.ThresholdCoefficientsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options3\.RaytracingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RAYTRACING_TIER_1_1;'),
-              (r'(options3\.RenderPassesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RENDER_PASS_TIER_2;'),
-              (r'(options3\.SRVOnlyTiledResourceTier3\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options4\.Native16BitShaderOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options4\.MSAAOperationsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RAYTRACING_TIER_1_1;'),
+              (r'(options5\.RenderPassesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RENDER_PASS_TIER_2;'),
+              (r'(options5\.SRVOnlyTiledResourceTier3\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options6\.VariableShadingRateTier\s*=\s*)[^;]+;', r'\g<1>D3D12_VARIABLE_SHADING_RATE_TIER_2;'),
               (r'(options6\.ShadingRateImageTileSize\s*=\s*)[^;]+;', r'\g<1>8;'),
               (r'(options6\.AdditionalShadingRatesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options6\.BackgroundProcessingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options6\.PerPrimitiveShadingRateSupportedWithViewportIndexing\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\g<1>D3D12_MESH_SHADER_TIER_1;'),
+              (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\g<1>D3D12_MESH_SHADER_TIER_NOT_SUPPORTED;'),
               (r'(options7\.SamplerFeedbackTier\s*=\s*)[^;]+;', r'\g<1>D3D12_SAMPLER_FEEDBACK_TIER_1_0;'),
               (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;'),
               (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_TILED_RESOURCES_TIER_3;'),
               (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;'),
               (r'(options\.ConservativeRasterizationTier\s*=\s*)[^;]+;', r'\g<1>D3D12_CONSERVATIVE_RASTERIZATION_TIER_3;'),
               (r'(options\.ROVsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>FALSE;'),
               (r'(options\.TypedUAVLoadAdditionalFormats\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.OutputMergerLogicOp\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.PSSpecifiedStencilRefSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -538,7 +540,7 @@ jobs:
             -Dc_link_args="$LINK_FLAGS" \
             -Dcpp_link_args="$LINK_FLAGS"
           ninja -C build-x64 -j$(nproc) 2>&1 | tee build-x64.log
-          [[ ${PIPESTATUS[0]} -ne 0 ]] && { tail -n 50 build-x64.log; exit 1; }
+          [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-x64.log; exit 1; }
 
           meson setup build-x86 \
             --cross-file ../crossfile-x86.txt \
@@ -548,7 +550,7 @@ jobs:
             -Dc_link_args="$LINK_FLAGS" \
             -Dcpp_link_args="$LINK_FLAGS"
           ninja -C build-x86 -j$(nproc) 2>&1 | tee build-x86.log
-          [[ ${PIPESTATUS[0]} -ne 0 ]] && { tail -n 50 build-x86.log; exit 1; }
+          [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-x86.log; exit 1; }
 
       - name: Verify Build
         run: |
@@ -596,39 +598,6 @@ jobs:
           name: ${{ env.PKG }}
           path: ${{ env.PKG }}.wcp
           retention-days: 30
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "${{ env.RELEASE_TAG }}" \
-            --repo "${{ github.repository }}" \
-            --title "VKD3D-Proton ${{ env.VER }} — ${{ env.BUILD_DATE }}" \
-            --notes "## VKD3D-Proton ${{ env.VER }}
-
-          | Property | Value |
-          |----------|-------|
-          | Version | \`${{ env.VER }}\` |
-          | Build Date | \`${{ env.BUILD_DATE }}\` |
-          | Commit | \`${{ env.COMMIT }}\` |
-          | LLVM MinGW | \`${{ steps.llvm.outputs.tag }}\` |
-          | Vulkan Headers | \`${{ env.VK_HEADERS_TAG }}\` |
-
-          ### Patches
-          - RE Engine Integer Blend Fix (GPU hang / vr -4 prevention)
-          - GPU Boost — Async Compute, Concurrent Queue, GPU VA Recycle
-          - Tile Based Rendering forced ON (Adreno/Turnip — fixes CPU 100%)
-          - ESync + Fsync — Timeline semaphore, shared timeline, Win32 fence OFF
-          - Shader Model capped to SM 6.6 (prevents CPU shader recompilation fallback)
-          - Feature Level 12.1 (accurate for Adreno 7xx — prevents FL mismatch overhead)
-          - Render Pass forced (tiled GPU — upstream PR #2856)
-          - UMA Host Cached memory
-          - Descriptor limits 1M+ UAB
-          - Pipeline cache 128K entries
-          - GPU memory 8 GB dedicated / 16 GB shared
-
-          [Source](https://github.com/HansKristian-Work/vkd3d-proton)" \
-            "${{ env.PKG }}.wcp"
 
       - name: Cleanup
         if: always()
