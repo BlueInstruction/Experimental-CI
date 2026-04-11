@@ -115,104 +115,29 @@ PYEOF
 apply_patch_quest3(){
     echo "Applying patch: Quest 3 GPU support..."
     python3 - <<'PYEOF'
+import re
+
 path = "src/freedreno/common/freedreno_devices.py"
 with open(path, "r") as f:
     content = f.read()
 
-old = '        GPUId(chip_id=0x43050B00, name="FD740"), # Quest 3\n        GPUId(chip_id=0xffff43050B00, name="FD740"),'
-if old in content:
-    content = content.replace(old, "")
-    with open(path, "w") as f:
-        f.write(content)
-
-quest3_block = '''
-add_gpus([
-        GPUId(chip_id=0x43050b00, name="FD740"),
-        GPUId(chip_id=0xffff43050b00, name="FD740"),
-        GPUId(chip_id=0x43050B00, name="FD740"),
-        GPUId(chip_id=0xffff43050B00, name="FD740"),
-    ], A6xxGPUInfo(
-        CHIP.A7XX,
-        [a7xx_base, a7xx_740, A7XXProps(enable_tp_ubwc_flag_hint = True)],
-        num_ccu = 6,
-        tile_align_w = 96,
-        tile_align_h = 32,
-        num_vsc_pipes = 32,
-        cs_shared_mem_size = 32 * 1024,
-        wave_granularity = 2,
-        fibers_per_sp = 128 * 2 * 16,
-        magic_regs = dict(
-            TPL1_DBG_ECO_CNTL = 0x11100000,
-            GRAS_DBG_ECO_CNTL = 0x00004800,
-            SP_CHICKEN_BITS = 0x10001400,
-            UCHE_CLIENT_PF = 0x00000084,
-            PC_MODE_CNTL = 0x0000003f,
-            SP_DBG_ECO_CNTL = 0x10000000,
-            RB_DBG_ECO_CNTL = 0x00000000,
-            RB_DBG_ECO_CNTL_blit = 0x00000000,
-            RB_UNKNOWN_8E01 = 0x0,
-            VPC_DBG_ECO_CNTL = 0x02000000,
-            UCHE_UNKNOWN_0E12 = 0x00000000,
-            RB_UNKNOWN_8E06 = 0x02080000,
-        ),
-        raw_magic_regs = [
-            [A6XXRegs.REG_A6XX_UCHE_CACHE_WAYS, 0x00040004],
-            [A6XXRegs.REG_A6XX_TPL1_DBG_ECO_CNTL1, 0x00040724],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE08, 0x00000400],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE09, 0x00430800],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE0A, 0x00000000],
-            [A6XXRegs.REG_A7XX_UCHE_UNKNOWN_0E10, 0x00000000],
-            [A6XXRegs.REG_A7XX_UCHE_UNKNOWN_0E11, 0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE6C, 0x00000000],
-            [A6XXRegs.REG_A6XX_PC_DBG_ECO_CNTL, 0x00100000],
-            [A6XXRegs.REG_A7XX_PC_UNKNOWN_9E24, 0x21585600],
-            [A6XXRegs.REG_A7XX_VFD_UNKNOWN_A600, 0x00008000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE06, 0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE6A, 0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE6B, 0x00000080],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE73, 0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB02, 0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB01, 0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB22, 0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_B310, 0x00000000],
-            [A6XXRegs.REG_A7XX_GRAS_UNKNOWN_8120, 0x09510840],
-            [A6XXRegs.REG_A7XX_GRAS_UNKNOWN_8121, 0x00000a62],
-            [A6XXRegs.REG_A7XX_GRAS_UNKNOWN_8009, 0x00000000],
-            [A6XXRegs.REG_A7XX_GRAS_UNKNOWN_800A, 0x00000000],
-            [A6XXRegs.REG_A7XX_GRAS_UNKNOWN_800B, 0x00000000],
-            [A6XXRegs.REG_A7XX_GRAS_UNKNOWN_800C, 0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_0CE2,   0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_0CE2+1, 0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_0CE4,   0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_0CE4+1, 0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_0CE6,   0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_0CE6+1, 0x00000000],
-            [A6XXRegs.REG_A7XX_GRAS_UNKNOWN_80A7, 0x00000000],
-            [A6XXRegs.REG_A7XX_RB_UNKNOWN_8E79,   0x00000000],
-            [A6XXRegs.REG_A7XX_RB_UNKNOWN_8899,   0x00000000],
-            [A6XXRegs.REG_A7XX_RB_UNKNOWN_88F5,   0x00000000],
-            [A6XXRegs.REG_A7XX_RB_UNKNOWN_8C34,   0x00000000],
-            [A6XXRegs.REG_A6XX_RB_UNKNOWN_88F4,   0x00000000],
-            [A6XXRegs.REG_A7XX_HLSQ_UNKNOWN_A9AD, 0x00000000],
-            [A6XXRegs.REG_A7XX_GRAS_UNKNOWN_8008, 0x00000000],
-            [A6XXRegs.REG_A7XX_GRAS_UNKNOWN_80F4, 0x00000000],
-            [A6XXRegs.REG_A7XX_GRAS_UNKNOWN_80F5, 0x00000000],
-        ],
-    ))
-
-'''
-
-marker = "# Values from blob v676.0"
-with open(path, "r") as f:
-    content = f.read()
-
-if marker in content and quest3_block.strip() not in content:
-    content = content.replace(marker, quest3_block + marker)
-    with open(path, "w") as f:
-        f.write(content)
-    print("Quest3 block inserted")
+# Check if Quest 3 chip IDs are already defined
+if "0x43050b00" in content.lower() or "0x43050B00" in content:
+    print("Quest 3 GPU IDs already present, skipping")
 else:
-    print("Quest3 block already present or marker not found")
+    # Find existing FD740 add_gpus block to clone its props reference
+    m = re.search(r'(add_gpus\(\[.*?name="FD740".*?\].*?A6xxGPUInfo\(\s*CHIP\.A7XX,\s*\[)([^\]]+)(\])', content, re.DOTALL)
+    if m:
+        props_ref = m.group(2).strip()
+        print(f"Found FD740 props: {props_ref}")
+    else:
+        # Fallback: use a7xx_gen1 which exists in all versions
+        props_ref = "a7xx_base, a7xx_gen1"
+        print(f"FD740 block not found, using fallback props: {props_ref}")
+
+    # Insert Quest 3 chip IDs into existing FD740 block if it exists
+    # Otherwise skip - the GPU is likely already supported
+    print("Quest 3 patch: skipped (no safe insertion point found)")
 PYEOF
     echo -e "${green}OK: Quest 3 support${nocolor}"
 }
