@@ -14,7 +14,7 @@ target_sdk="36"
 base_repo="https://github.com/whitebelyash/mesa-tu8.git"
 base_branch="gen8"
 
-bad_commit="2f0ea1c6"
+bad_commit="f95913e"
 
 commit_hash=""
 version_str=""
