@@ -52,91 +52,40 @@ prepare_ndk(){
 
 apply_patch_disable_branch_and_or(){
     echo "Applying patch: disable has_branch_and_or..."
-    patch -p1 --no-backup-if-mismatch <<'PATCH'
-diff --git a/src/freedreno/ir3/ir3_compiler.c b/src/freedreno/ir3/ir3_compiler.c
---- a/src/freedreno/ir3/ir3_compiler.c
-+++ b/src/freedreno/ir3/ir3_compiler.c
-@@ -218,7 +218,7 @@ ir3_compiler_create(struct fd_device *dev, const struct fd_dev_id *dev_id,
-       compiler->load_inline_uniforms_via_preamble_ldgk = dev_info->a7xx.load_inline_uniforms_via_preamble_ldgk;
-       compiler->num_predicates = 4;
-       compiler->bitops_can_write_predicates = true;
--      compiler->has_branch_and_or = true;
-+      compiler->has_branch_and_or = false;
-    } else {
-       compiler->max_const_pipeline = 512;
-       compiler->max_const_geom = 512;
-PATCH
+    sed -i 's/compiler->has_branch_and_or = true;/compiler->has_branch_and_or = false;/g' \
+        src/freedreno/ir3/ir3_compiler.c
     echo -e "${green}OK: disable has_branch_and_or${nocolor}"
 }
 
 apply_patch_disable_workgroup_memory(){
     echo "Applying patch: disable KHR_workgroup_memory_explicit_layout..."
-    patch -p1 --no-backup-if-mismatch <<'PATCH'
-diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
---- a/src/freedreno/vulkan/tu_device.cc
-+++ b/src/freedreno/vulkan/tu_device.cc
-@@ -222,7 +222,7 @@ get_device_extensions(const struct tu_physical_device *device,
-       .KHR_variable_pointers = true,
-       .KHR_vertex_attribute_divisor = true,
-       .KHR_vulkan_memory_model = true,
--      .KHR_workgroup_memory_explicit_layout = true,
-+      .KHR_workgroup_memory_explicit_layout = false,
-       .KHR_zero_initialize_workgroup_memory = true,
- 
-       .EXT_4444_formats = true,
-@@ -494,11 +494,11 @@ tu_get_features(struct tu_physical_device *pdevice,
-    features->vertexAttributeInstanceRateDivisor = true;
-    features->vertexAttributeInstanceRateZeroDivisor = true;
- 
--   /* VK_KHR_workgroup_memory_explicit_layout */
--   features->workgroupMemoryExplicitLayout = true;
--   features->workgroupMemoryExplicitLayoutScalarBlockLayout = true;
--   features->workgroupMemoryExplicitLayout8BitAccess = true;
--   features->workgroupMemoryExplicitLayout16BitAccess = true;
-+   /* VK_KHR_workgroup_memory_explicit_layout */
-+   features->workgroupMemoryExplicitLayout = false;
-+   features->workgroupMemoryExplicitLayoutScalarBlockLayout = false;
-+   features->workgroupMemoryExplicitLayout8BitAccess = false;
-+   features->workgroupMemoryExplicitLayout16BitAccess = false;
- 
-    /* VK_EXT_4444_formats */
-    features->formatA4R4G4B4 = true;
-PATCH
+    local f="src/freedreno/vulkan/tu_device.cc"
+    sed -i 's/\.KHR_workgroup_memory_explicit_layout = true/.KHR_workgroup_memory_explicit_layout = false/' "$f"
+    sed -i 's/features->workgroupMemoryExplicitLayout = true/features->workgroupMemoryExplicitLayout = false/g' "$f"
+    sed -i 's/features->workgroupMemoryExplicitLayoutScalarBlockLayout = true/features->workgroupMemoryExplicitLayoutScalarBlockLayout = false/' "$f"
+    sed -i 's/features->workgroupMemoryExplicitLayout8BitAccess = true/features->workgroupMemoryExplicitLayout8BitAccess = false/' "$f"
+    sed -i 's/features->workgroupMemoryExplicitLayout16BitAccess = true/features->workgroupMemoryExplicitLayout16BitAccess = false/' "$f"
     echo -e "${green}OK: disable KHR_workgroup_memory_explicit_layout${nocolor}"
 }
 
 apply_patch_fix_a725_a730(){
     echo "Applying patch: fix a725/a730 compute_constlen_quirk..."
-    patch -p1 --no-backup-if-mismatch <<'PATCH'
-diff --git a/src/freedreno/common/freedreno_devices.py b/src/freedreno/common/freedreno_devices.py
---- a/src/freedreno/common/freedreno_devices.py
-+++ b/src/freedreno/common/freedreno_devices.py
-@@ -875,6 +875,7 @@ a7xx_gen1 = A7XXProps(
-         fs_must_have_non_zero_constlen_quirk = True,
-         enable_tp_ubwc_flag_hint = True,
-         reading_shading_rate_requires_smask_quirk = True,
-+        compute_constlen_quirk = True,
-     )
-PATCH
+    sed -i '/reading_shading_rate_requires_smask_quirk = True,/a\        compute_constlen_quirk = True,' \
+        src/freedreno/common/freedreno_devices.py
     echo -e "${green}OK: fix a725/a730${nocolor}"
 }
 
 apply_patch_force_sysmem(){
     echo "Applying patch: force sysmem rendering..."
-    patch -p1 --no-backup-if-mismatch <<'PATCH'
-diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
---- a/src/freedreno/vulkan/tu_cmd_buffer.cc
-+++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
-@@ -985,6 +985,8 @@ static bool
- use_sysmem_rendering(struct tu_cmd_buffer *cmd,
-                      struct tu_renderpass_result **autotune_result)
- {
-+   return true;
-+
-    if (TU_DEBUG(SYSMEM)) {
-       cmd->state.rp.gmem_disable_reason = "TU_DEBUG(SYSMEM)";
-       return true;
-PATCH
+    sed -i '/^use_sysmem_rendering(struct tu_cmd_buffer \*cmd,/{
+        n
+        /^{/a\   return true;\n
+    }' src/freedreno/vulkan/tu_cmd_buffer.cc
+    # Fallback: insert after the opening brace of the function
+    if ! grep -q 'return true;' src/freedreno/vulkan/tu_cmd_buffer.cc 2>/dev/null; then
+        sed -i '/use_sysmem_rendering.*autotune_result)/{n;s/^{$/{\n   return true;\n/}' \
+            src/freedreno/vulkan/tu_cmd_buffer.cc
+    fi
     echo -e "${green}OK: force sysmem${nocolor}"
 }
 
