@@ -437,10 +437,7 @@ jobs:
                       content = header + content
                   with open(vkd3d_private, "w") as f:
                       f.write(content)
-                  if "header_defines" not in group_stats:
-                      group_stats["header_defines"] = {"applied": 0, "files": []}
-                  group_stats["header_defines"]["applied"] += 1
-                  group_stats["header_defines"]["files"].append("vkd3d_private.h:1")
+                  applied += 1
 
           queue_timeline = "libs/vkd3d/queue_timeline.c"
           if os.path.exists(queue_timeline):
@@ -612,6 +609,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          gh release delete "${{ env.RELEASE_TAG }}" --repo "${{ github.repository }}" -y 2>/dev/null || true
           gh release create "${{ env.RELEASE_TAG }}" \
             --repo "${{ github.repository }}" \
             --title "VKD3D-Proton v${{ env.VER }} x64 — ${{ env.COMMIT }}" \

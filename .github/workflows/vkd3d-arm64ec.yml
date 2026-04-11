@@ -616,6 +616,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          gh release delete "${{ env.RELEASE_TAG }}" --repo "${{ github.repository }}" -y 2>/dev/null || true
           gh release create "${{ env.RELEASE_TAG }}" \
             --repo "${{ github.repository }}" \
             --title "VKD3D-Proton v${{ env.VER }} ARM64EC — ${{ env.COMMIT }}" \
