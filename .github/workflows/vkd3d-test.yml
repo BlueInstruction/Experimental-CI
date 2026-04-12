@@ -274,6 +274,9 @@ jobs:
               (r'(options\.ConservativeRasterizationTier\s*=\s*)[^;]+;', r'\g<1>D3D12_CONSERVATIVE_RASTERIZATION_TIER_3;'),
               (r'(options\.ROVsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>FALSE;'),
+              # === MEMORY ALLOCATION CAP — prevent 1GB KGSL wall crash ===
+              (r'(#define\s+VKD3D_VA_BLOCK_SIZE\s+)\w+', r'\g<1>(512ull * 1024 * 1024)'),
+              (r'(committed_resource_size_limit\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>512 * 1024 * 1024;'),
               (r'(options\.TypedUAVLoadAdditionalFormats\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.OutputMergerLogicOp\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.PSSpecifiedStencilRefSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
