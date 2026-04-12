@@ -6,8 +6,9 @@ on:
       mesa_source:
         type: choice
         description: "Mesa source"
-        default: "main_branch"
+        default: "adreno_main"
         options:
+          - adreno_main
           - latest_release
           - staging_branch
           - main_branch
@@ -115,7 +116,7 @@ jobs:
         id: build
         run: |
           chmod +x turnip-driver.sh
-          export MESA_SOURCE="${{ inputs.mesa_source || 'main_branch' }}"
+          export MESA_SOURCE="${{ inputs.mesa_source || 'adreno_main' }}"
           export STAGING_BRANCH="${{ inputs.staging_branch || 'staging/26.0' }}"
           export CUSTOM_TAG="${{ inputs.custom_tag || '' }}"
           export BUILD_TYPE="${{ inputs.build_type || 'release' }}"

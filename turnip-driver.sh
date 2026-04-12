@@ -15,11 +15,12 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 WORKDIR="${GITHUB_WORKSPACE:-$(pwd)}/build"
 MESA_DIR="${WORKDIR}/mesa"
 PATCHES_DIR="$(pwd)/patches"
-MESA_REPO="https://gitlab.freedesktop.org/mesa/mesa.git"
-MESA_MIRROR="https://github.com/mesa3d/mesa.git"
+MESA_REPO="https://github.com/BlueInstruction/mesa-for-android-container.git"
+MESA_BRANCH_DEFAULT="adreno-main"
+MESA_MIRROR="https://gitlab.freedesktop.org/mesa/mesa.git"
 VULKAN_HEADERS_REPO="https://github.com/KhronosGroup/Vulkan-Headers.git"
 
-MESA_SOURCE="${MESA_SOURCE:-main_branch}"
+MESA_SOURCE="${MESA_SOURCE:-adreno_main}"
 STAGING_BRANCH="${STAGING_BRANCH:-staging/26.0}"
 CUSTOM_TAG="${CUSTOM_TAG:-}"
 BUILD_TYPE="${BUILD_TYPE:-release}"
@@ -48,8 +49,10 @@ check_deps() {
 }
 
 fetch_latest_release() {
+    # Query upstream Mesa (gitlab/mirror) for latest release tag
+    local upstream="https://gitlab.freedesktop.org/mesa/mesa.git"
     local tags=""
-    tags=$(git ls-remote --tags --refs "$MESA_REPO" 2>/dev/null | \
+    tags=$(git ls-remote --tags --refs "$upstream" 2>/dev/null | \
         grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1) || true
     if [[ -z "$tags" ]]; then
         tags=$(git ls-remote --tags --refs "$MESA_MIRROR" 2>/dev/null | \
@@ -106,6 +109,12 @@ clone_mesa() {
     local target_ref=""
 
     case "$MESA_SOURCE" in
+        adreno_main)
+            # Primary: BlueInstruction/mesa-for-android-container adreno-main
+            # Clean Mesa with proper KGSL support for Adreno 750
+            target_ref="$MESA_BRANCH_DEFAULT"
+            clone_args=("--depth" "200" "--branch" "$target_ref")
+            ;;
         latest_release)
             target_ref=$(fetch_latest_release)
             clone_args=("--depth" "1" "--branch" "$target_ref")
@@ -128,12 +137,17 @@ clone_mesa() {
             clone_args=("--depth" "1" "--branch" "$target_ref")
             ;;
     esac
-    log_info "Target: $target_ref"
+    log_info "Target: $target_ref from $MESA_SOURCE"
 
     if ! git clone "${clone_args[@]}" "$MESA_REPO" "$MESA_DIR" 2>/dev/null; then
-        log_warn "Primary source failed, trying mirror"
+        log_warn "Primary source ($MESA_REPO) failed, trying mirror"
+        # For adreno_main fallback, use upstream main
+        if [[ "$MESA_SOURCE" == "adreno_main" ]]; then
+            target_ref="main"
+            clone_args=("--depth" "200" "--branch" "main")
+        fi
         if ! git clone "${clone_args[@]}" "$MESA_MIRROR" "$MESA_DIR" 2>/dev/null; then
-            log_error "Failed to clone Mesa"
+            log_error "Failed to clone Mesa from any source"
             exit 1
         fi
     fi
@@ -393,9 +407,9 @@ for pat in [
             insert_at = close - 1
             heap_code = (
                 '\n   if (TU_DEBUG(DECK_EMU)) {\n'
-                '      /* A750_WIN_PROFILE: 20 GiB heap */\n'
+                '      /* A750_WIN_PROFILE: 2 GiB heap (realistic for KGSL) */\n'
                 f'      if ({param}->memoryProperties.memoryHeapCount > 0)\n'
-                f'         {param}->memoryProperties.memoryHeaps[0].size = 20479ULL * 1024ULL * 1024ULL;\n'
+                f'         {param}->memoryProperties.memoryHeaps[0].size = 2048ULL * 1024ULL * 1024ULL;\n'
                 '   }\n'
             )
             content = content[:insert_at] + '\n' + heap_code + content[insert_at:]
@@ -410,7 +424,7 @@ if not heap_injected:
     if m_hs:
         ln_end = content.find('\n', m_hs.end())
         if ln_end == -1: ln_end = len(content)
-        heap_code = '\n   if (TU_DEBUG(DECK_EMU)) {\n      /* A750_WIN_PROFILE: 20 GiB heap fallback */\n      pdevice->memory.memoryProperties.memoryHeaps[0].size = 20479ULL * 1024ULL * 1024ULL;\n   }\n'
+        heap_code = '\n   if (TU_DEBUG(DECK_EMU)) {\n      /* A750_WIN_PROFILE: 2 GiB heap fallback (realistic for KGSL) */\n      pdevice->memory.memoryProperties.memoryHeaps[0].size = 2048ULL * 1024ULL * 1024ULL;\n   }\n'
         content = content[:ln_end] + '\n' + heap_code + content[ln_end:]
         print('[OK] 20 GiB heap injected (fallback after memoryHeaps assignment)')
         applied += 1
@@ -978,8 +992,7 @@ package_driver() {
     cat > "${pkg_dir}/meta.json" << EOF
 {
     "schemaVersion": 1,
-    "name": "Turnip A750 Windows-${build_date}"
-    ",
+    "name": "Turnip A750 Windows-${build_date}",
     "description": "Adreno 750 — Windows x86_64 identity",
     "author": "BlueInstruction",
     "packageVersion": "1",
@@ -1011,7 +1024,7 @@ print_summary() {
     echo "  vendorID       : 0x5143 (Qualcomm)"
     echo "  deviceID       : 0x43a"
     echo "  apiVersion     : 1.3.295"
-    echo "  Heap           : 20 GiB"
+    echo "  Heap           : 2 GiB (KGSL realistic)"
     echo "  Extensions     : 149 (Windows A750)"
     echo "  Mesa Version   : $version"
     echo "  Vulkan Header  : $vulkan_version"
