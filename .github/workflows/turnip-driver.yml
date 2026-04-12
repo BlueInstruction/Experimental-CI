@@ -67,6 +67,11 @@ on:
         description: "Apply patch series from patches/series/ if present"
         default: true
 
+      build_number:
+        description: "Build number (e.g. 1, 2, 3) — used in filename Turnip_v{version}-B{number}"
+        required: false
+        default: "1"
+
       enable_perf:
         type: boolean
         description: "Enable freedreno performance options"
@@ -128,6 +133,7 @@ jobs:
           export ENABLE_UBWC_HACK="${{ github.event.inputs.enable_ubwc_hack != '' && github.event.inputs.enable_ubwc_hack || 'true' }}"
           export APPLY_PATCH_SERIES="${{ github.event.inputs.apply_patch_series != '' && github.event.inputs.apply_patch_series || 'true' }}"
           export ENABLE_PERF="${{ github.event.inputs.enable_perf != '' && github.event.inputs.enable_perf || 'false' }}"
+          export BUILD_NUMBER="${{ inputs.build_number || '1' }}"
 
           bash turnip-driver.sh
 

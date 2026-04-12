@@ -32,6 +32,7 @@ ENABLE_TIMELINE_HACK="${ENABLE_TIMELINE_HACK:-true}"
 ENABLE_UBWC_HACK="${ENABLE_UBWC_HACK:-true}"
 ENABLE_DECK_EMU="${ENABLE_DECK_EMU:-true}"
 APPLY_PATCH_SERIES="${APPLY_PATCH_SERIES:-true}"
+BUILD_NUMBER="${BUILD_NUMBER:-1}"
 
 CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
 CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
@@ -90,6 +91,14 @@ prepare_workdir() {
 }
 
 update_vulkan_headers() {
+    # Skip header update for adreno_main — the fork ships compatible headers.
+    # Overwriting with latest upstream headers causes _EXT→_KHR rename mismatches
+    # (e.g. VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT removed in newer headers).
+    if [[ "$MESA_SOURCE" == "adreno_main" ]]; then
+        log_info "Skipping Vulkan headers update (adreno_main ships compatible headers)"
+        return 0
+    fi
+
     log_info "Updating Vulkan headers"
     local headers_dir="${WORKDIR}/vulkan-headers"
     git clone --depth=1 "$VULKAN_HEADERS_REPO" "$headers_dir" 2>/dev/null || {
@@ -979,23 +988,18 @@ package_driver() {
     local driver_size variant_suffix filename
     driver_size=$(du -h "${pkg_dir}/${driver_name}" | cut -f1)
 
-    case "$BUILD_VARIANT" in
-        optimized) variant_suffix="opt"     ;;
-        debug)     variant_suffix="debug"   ;;
-        profile)   variant_suffix="profile" ;;
-        vanilla)   variant_suffix="vanilla" ;;
-        *)         variant_suffix="opt"     ;;
-    esac
+    # Strip -devel suffix for clean version (26.1.0-devel → 26.1.0)
+    local clean_version="${version%-devel}"
 
-    filename="turnip_a750_v${version}_${variant_suffix}_${build_date}"
+    filename="Turnip_v${clean_version}-B${BUILD_NUMBER}"
 
     cat > "${pkg_dir}/meta.json" << EOF
 {
     "schemaVersion": 1,
-    "name": "Turnip A750 Windows-${build_date}",
+    "name": "Turnip_v${clean_version}-B${BUILD_NUMBER}",
     "description": "Adreno 750 — Windows x86_64 identity",
     "author": "BlueInstruction",
-    "packageVersion": "1",
+    "packageVersion": "${BUILD_NUMBER}",
     "vendor": "Mesa",
     "driverVersion": "${vulkan_version}",
     "minApi": 28,
@@ -1019,24 +1023,20 @@ print_summary() {
     vulkan_version=$(cat "${WORKDIR}/vulkan_version.txt")
     build_date=$(cat "${WORKDIR}/build_date.txt")
     echo ""
+    local clean_version="${version%-devel}"
     log_info "Build Summary"
-    echo "  Profile        : Adreno 750 Windows x86_64"
-    echo "  vendorID       : 0x5143 (Qualcomm)"
-    echo "  deviceID       : 0x43a"
-    echo "  apiVersion     : 1.3.295"
-    echo "  Heap           : 2 GiB (KGSL realistic)"
-    echo "  Extensions     : 149 (Windows A750)"
+    echo "  Package        : Turnip_v${clean_version}-B${BUILD_NUMBER}"
     echo "  Mesa Version   : $version"
     echo "  Vulkan Header  : $vulkan_version"
+    echo "  Build Number   : $BUILD_NUMBER"
     echo "  Commit         : $commit"
     echo "  Build Date     : $build_date"
     echo "  Build Variant  : $BUILD_VARIANT"
     echo "  Source         : $MESA_SOURCE"
-    echo "  Performance    : $ENABLE_PERF"
+    echo "  Heap           : 2 GiB (KGSL realistic)"
     echo "  Deck Emu       : $ENABLE_DECK_EMU"
     echo "  Timeline Hack  : $ENABLE_TIMELINE_HACK"
     echo "  UBWC Hack      : $ENABLE_UBWC_HACK"
-    echo "  Patch Series   : $APPLY_PATCH_SERIES"
     echo "  Output         :"
     ls -lh "${WORKDIR}"/*.zip 2>/dev/null | awk '{print "    " $9 " (" $5 ")"}'
     echo ""
