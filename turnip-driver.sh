@@ -183,6 +183,16 @@ clone_mesa() {
 }
 
 update_vulkan_headers() {
+    # Stable releases (latest_release, staging_branch, custom_tag) ship headers
+    # that match their generated code — overwriting them with bleeding-edge
+    # Vulkan-Headers breaks the build (e.g. EXT→KHR promotions remove aliases
+    # that the generated vk_enum_to_str.c still references).
+    case "$MESA_SOURCE" in
+        latest_release|staging_branch|custom_tag)
+            log_info "Skipping Vulkan header update (stable release — bundled headers match generated code)"
+            return 0
+            ;;
+    esac
     log_info "Updating Vulkan headers (ensures EXT↔KHR compatibility aliases)"
     local hdr_dir="${WORKDIR}/vk-headers"
     git clone --depth=1 "$VULKAN_HEADERS_REPO" "$hdr_dir" 2>/dev/null || {
