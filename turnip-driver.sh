@@ -47,27 +47,33 @@
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 set -euo pipefail
 
+# ── Logging ────────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 RED='\033[0;31m'
+BOLD='\033[1m'
 NC='\033[0m'
 
 log_info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
 log_success() { echo -e "${GREEN}[OK]${NC} $*"; }
 log_warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+log_section() { echo -e "\n${BOLD}── $* ──${NC}"; }
 
+# ── Paths ──────────────────────────────────────────────────────────────────────
 WORKDIR="${GITHUB_WORKSPACE:-$(pwd)}/build"
 MESA_DIR="${WORKDIR}/mesa"
 PATCHES_DIR="$(pwd)/patches"
 
+# ── Source repositories ────────────────────────────────────────────────────────
 MESA_REPO="https://github.com/BlueInstruction/mesa-for-android-container.git"
 MESA_BRANCH_DEFAULT="adreno-main"
 MESA_MIRROR="https://gitlab.freedesktop.org/mesa/mesa.git"
 TURNIP_CI_REPO="https://github.com/whitebelyash/freedreno_turnip-CI.git"
 VULKAN_HEADERS_REPO="https://github.com/KhronosGroup/Vulkan-Headers.git"
 
+# ── Build configuration ───────────────────────────────────────────────────────
 MESA_SOURCE="${MESA_SOURCE:-adreno_main}"
 STAGING_BRANCH="${STAGING_BRANCH:-staging/26.0}"
 CUSTOM_TAG="${CUSTOM_TAG:-}"
@@ -77,6 +83,7 @@ NDK_PATH="${NDK_PATH:-/opt/android-ndk}"
 API_LEVEL="${API_LEVEL:-36}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 
+# ── Feature toggles (Qualcomm GDG 80-78185-2 AL informed) ─────────────────────
 ENABLE_TIMELINE_HACK="${ENABLE_TIMELINE_HACK:-true}"
 ENABLE_UBWC_HACK="${ENABLE_UBWC_HACK:-true}"
 ENABLE_DECK_EMU="${ENABLE_DECK_EMU:-true}"
@@ -84,7 +91,8 @@ ENABLE_A7XX_FIXES="${ENABLE_A7XX_FIXES:-true}"
 ENABLE_QUEST3="${ENABLE_QUEST3:-true}"
 APPLY_PATCH_SERIES="${APPLY_PATCH_SERIES:-true}"
 
-# Compiler flags targeting broadest A7xx coverage (A730/A740/A750):
+# ── Compiler flags ─────────────────────────────────────────────────────────────
+# Targeting broadest A7xx coverage (A730/A740/A750):
 #   -O3                         maximum optimization
 #   -march=armv8.2-a            base ISA (all Cortex-X2/X3/X4 cores)
 #   +fp16                       native f16 — Adreno scalar unit uses fp16 paths
@@ -1294,15 +1302,20 @@ package_driver() {
 {
     "schemaVersion": 1,
     "name": "${filename}",
-    "description": "Adreno 750 A7xx — KGSL — Android ${API_LEVEL} — Mesa ${clean_version}",
+    "description": "Mesa Turnip (Freedreno) — Adreno A7xx FOSS Vulkan — KGSL — Android ${API_LEVEL}",
     "author": "BlueInstruction",
     "packageVersion": "${BUILD_NUMBER}",
-    "vendor": "Mesa / Qualcomm Freedreno",
+    "vendor": "Mesa / Qualcomm Freedreno (Igalia/Valve)",
     "driverVersion": "${vulkan_version}",
+    "mesaVersion": "${clean_version}",
     "minApi": 28,
     "libraryName": "${driver_name}",
     "buildDate": "${build_date}",
-    "commit": "${commit}"
+    "commit": "${commit}",
+    "targetHardware": "Adreno 730/740/750 (Snapdragon 8 Gen 1/2/3)",
+    "dxvkSupport": "DX9/DX10/DX11 via DXVK",
+    "vkd3dSupport": "DX12 FL12_1 via VKD3D-Proton",
+    "reference": "Qualcomm GDG 80-78185-2 AL"
 }
 EOF
 
@@ -1324,45 +1337,69 @@ print_summary() {
     local clean_version="${version%-devel}"
 
     echo ""
-    echo "  ╔══════════════════════════════════════════════════════╗"
-    echo "  ║           Turnip Driver Build Summary                ║"
-    echo "  ╠══════════════════════════════════════════════════════╣"
-    printf "  ║  %-20s : %-30s ║\n" "Package"       "Turnip_v${clean_version}-B${BUILD_NUMBER}"
-    printf "  ║  %-20s : %-30s ║\n" "Mesa Version"  "$version"
-    printf "  ║  %-20s : %-30s ║\n" "Vulkan Header" "$vulkan_version"
-    printf "  ║  %-20s : %-30s ║\n" "Commit"        "$commit"
-    printf "  ║  %-20s : %-30s ║\n" "Build Date"    "$build_date"
-    printf "  ║  %-20s : %-30s ║\n" "Build Variant" "$BUILD_VARIANT"
-    printf "  ║  %-20s : %-30s ║\n" "Source"        "$MESA_SOURCE"
-    printf "  ║  %-20s : %-30s ║\n" "API Level"     "$API_LEVEL"
-    printf "  ║  %-20s : %-30s ║\n" "Deck Emu"      "$ENABLE_DECK_EMU"
-    printf "  ║  %-20s : %-30s ║\n" "A7xx Fixes"    "$ENABLE_A7XX_FIXES"
-    printf "  ║  %-20s : %-30s ║\n" "Quest 3"       "$ENABLE_QUEST3"
-    printf "  ║  %-20s : %-30s ║\n" "Timeline Hack" "$ENABLE_TIMELINE_HACK"
-    printf "  ║  %-20s : %-30s ║\n" "UBWC 5/6"      "$ENABLE_UBWC_HACK"
-    printf "  ║  %-20s : %-30s ║\n" "LTO"           "true"
-    printf "  ║  %-20s : %-30s ║\n" "March"         "armv8.2-a+fp16+rcpc+dotprod+i8mm"
-    echo "  ╚══════════════════════════════════════════════════════╝"
+    echo "  ╔═══════════════════════════════════════════════════════════╗"
+    echo "  ║           Turnip Driver Build Summary                     ║"
+    echo "  ║  Mesa Freedreno — Qualcomm Adreno A7xx FOSS Vulkan       ║"
+    echo "  ╠═══════════════════════════════════════════════════════════╣"
+    printf "  ║  %-20s : %-35s ║\n" "Package"       "Turnip_v${clean_version}-B${BUILD_NUMBER}"
+    printf "  ║  %-20s : %-35s ║\n" "Mesa Version"  "$version"
+    printf "  ║  %-20s : %-35s ║\n" "Vulkan Header" "$vulkan_version"
+    printf "  ║  %-20s : %-35s ║\n" "Commit"        "$commit"
+    printf "  ║  %-20s : %-35s ║\n" "Build Date"    "$build_date"
+    echo "  ╠═══════════════════════════════════════════════════════════╣"
+    printf "  ║  %-20s : %-35s ║\n" "Build Variant" "$BUILD_VARIANT"
+    printf "  ║  %-20s : %-35s ║\n" "Source"        "$MESA_SOURCE"
+    printf "  ║  %-20s : %-35s ║\n" "API Level"     "$API_LEVEL"
+    printf "  ║  %-20s : %-35s ║\n" "LTO"           "true"
+    printf "  ║  %-20s : %-35s ║\n" "March"         "armv8.2-a+fp16+rcpc+dotprod+i8mm"
+    echo "  ╠═══════════════════════════════════════════════════════════╣"
+    printf "  ║  %-20s : %-35s ║\n" "Deck Emu"      "$ENABLE_DECK_EMU"
+    printf "  ║  %-20s : %-35s ║\n" "A7xx Fixes"    "$ENABLE_A7XX_FIXES"
+    printf "  ║  %-20s : %-35s ║\n" "Quest 3"       "$ENABLE_QUEST3"
+    printf "  ║  %-20s : %-35s ║\n" "Timeline Hack" "$ENABLE_TIMELINE_HACK"
+    printf "  ║  %-20s : %-35s ║\n" "UBWC 5/6"      "$ENABLE_UBWC_HACK"
+    echo "  ╠═══════════════════════════════════════════════════════════╣"
+    echo "  ║  Translation layer support (via Vulkan extensions):      ║"
+    echo "  ║    DXVK        — DX9/10/11 → Vulkan    ✓ supported      ║"
+    echo "  ║    VKD3D-Proton — DX12 FL12_1 → Vulkan  ✓ supported     ║"
+    echo "  ║    DX12 Ultimate (mesh/RT pipeline)      ✗ A8x required  ║"
+    echo "  ╚═══════════════════════════════════════════════════════════╝"
     echo ""
     ls -lh "${WORKDIR}"/*.zip 2>/dev/null | awk '{print "  Output: " $9 " (" $5 ")"}'
     echo ""
 }
 
 main() {
-    log_info "Turnip Driver Builder — A750 / A7xx"
+    echo ""
+    echo -e "${BOLD}  Turnip Driver Builder — Adreno A7xx${NC}"
+    echo -e "  Mesa Freedreno FOSS Vulkan Driver (Igalia/Valve)"
+    echo -e "  Qualcomm GDG 80-78185-2 AL informed patches"
+    echo ""
     log_info "Variant: $BUILD_VARIANT | Source: $MESA_SOURCE | API: $API_LEVEL"
 
+    log_section "Prerequisites"
     check_deps
     prepare_workdir
+
+    log_section "Mesa Source"
     clone_mesa
     update_vulkan_headers
+
+    log_section "Patches (A7xx / VKD3D-Proton / DXVK)"
     apply_patches
+
+    log_section "Build Environment"
     setup_subprojects
     create_cross_file
+
+    log_section "Compilation"
     configure_build
     compile_driver
+
+    log_section "Packaging"
     package_driver
     print_summary
+
     log_success "Build complete"
 }
 

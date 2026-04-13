@@ -1,4 +1,4 @@
-name: Turnip-Driver
+name: Turnip Driver — Adreno A7xx (Mesa Freedreno)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 
       mesa_source:
         type: choice
-        description: "Mesa source"
+        description: "Mesa source (adreno_main = BlueInstruction fork, clean_main = upstream + CI patches)"
         default: "adreno_main"
         options:
           - adreno_main
@@ -40,7 +40,7 @@ on:
 
       build_variant:
         type: choice
-        description: "Build variant"
+        description: "Build variant (optimized = all patches, vanilla = no patches, debug/profile = dev builds)"
         default: "optimized"
         options:
           - optimized
