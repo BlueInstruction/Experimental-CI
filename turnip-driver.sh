@@ -183,11 +183,7 @@ clone_mesa() {
 }
 
 update_vulkan_headers() {
-    if [[ "$MESA_SOURCE" == "adreno_main" || "$MESA_SOURCE" == "clean_main" ]]; then
-        log_info "Skipping Vulkan header update (fork ships compatible headers)"
-        return 0
-    fi
-    log_info "Updating Vulkan headers"
+    log_info "Updating Vulkan headers (ensures EXT↔KHR compatibility aliases)"
     local hdr_dir="${WORKDIR}/vk-headers"
     git clone --depth=1 "$VULKAN_HEADERS_REPO" "$hdr_dir" 2>/dev/null || {
         log_warn "Failed to clone Vulkan headers — using Mesa defaults"
