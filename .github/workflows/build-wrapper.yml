@@ -52,7 +52,7 @@ jobs:
             bison flex gettext \
             libwayland-dev wayland-protocols \
             glslang-tools spirv-tools \
-            libssl-dev libxml2-dev \
+            libssl-dev libxml2-dev libzstd-dev liblz4-dev libicu-dev \
             ccache ca-certificates curl git
 
           # Ensure meson is recent enough (>= 1.0)
