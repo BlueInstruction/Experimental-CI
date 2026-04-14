@@ -156,17 +156,37 @@ jobs:
           done
           echo "Subprojects ready"
 
-      - name: Inspect meson build options
+      - name: Clone termux build scripts
+        run: |
+          git clone --depth=1 https://github.com/leegao/vulkan_wrapper_termux-packages.git termux-build
+          echo "TERMUX_BUILD=$(pwd)/termux-build" >> $GITHUB_ENV
+
+      - name: Inspect build system
         run: |
           cd "$WRAPPER_DIR"
           echo "=== meson_options.txt ==="
           cat meson_options.txt 2>/dev/null | head -100 || echo "(not found)"
           echo ""
           echo "=== Searching for wrapper build target ==="
-          grep -r "vulkan_wrapper\|libvulkan_wrapper" meson.build src/*/meson.build 2>/dev/null | head -30 || true
+          grep -rn "vulkan_wrapper\|libvulkan_wrapper" meson.build src/*/meson.build 2>/dev/null | head -30 || true
           echo ""
           echo "=== Checking vulkan-drivers options ==="
-          grep -r "vulkan.drivers\|vulkan-drivers\|wrapper" meson_options.txt meson.build 2>/dev/null | head -20 || true
+          grep -rn "vulkan.drivers\|vulkan-drivers\|wrapper" meson_options.txt meson.build 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Root meson.build subdir calls ==="
+          grep "subdir(" meson.build | head -30 || true
+          echo ""
+          echo "=== src/ directories ==="
+          ls -d src/*/ 2>/dev/null | head -30 || true
+          echo ""
+          echo "=== Termux build script ==="
+          cat "$TERMUX_BUILD"/packages/vulkan-wrapper/build.sh 2>/dev/null || \
+          find "$TERMUX_BUILD" -name "build.sh" -exec echo "--- {} ---" \; -exec cat {} \; 2>/dev/null | head -200 || \
+          find "$TERMUX_BUILD" -name "*.sh" -exec echo "--- {} ---" \; -exec head -50 {} \; 2>/dev/null | head -200 || \
+          echo "(no build scripts found)"
+          echo ""
+          echo "=== Termux repo structure ==="
+          find "$TERMUX_BUILD" -maxdepth 3 -type f | head -50 || true
 
       - name: Configure Meson build
         run: |
