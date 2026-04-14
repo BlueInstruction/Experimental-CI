@@ -113,33 +113,33 @@ jobs:
           [[ ! -f "${NDK_BIN}/aarch64-linux-android${CVER}-clang" ]] && CVER="28"
           [[ ! -f "${NDK_BIN}/aarch64-linux-android${CVER}-clang" ]] && CVER="26"
 
-          cat > cross-aarch64-android.txt << 'CROSSEOF'
-[binaries]
-ar     = 'NDK_BIN_PLACEHOLDER/llvm-ar'
-c      = ['ccache', 'NDK_BIN_PLACEHOLDER/aarch64-linux-androidCVER_PLACEHOLDER-clang', '--sysroot=NDK_SYS_PLACEHOLDER']
-cpp    = ['ccache', 'NDK_BIN_PLACEHOLDER/aarch64-linux-androidCVER_PLACEHOLDER-clang++', '--sysroot=NDK_SYS_PLACEHOLDER']
-c_ld   = 'lld'
-cpp_ld = 'lld'
-strip  = 'NDK_BIN_PLACEHOLDER/llvm-strip'
-pkgconfig = '/usr/bin/pkg-config'
+          python3 -c "
+          ndk_bin='${NDK_BIN}'; ndk_sys='${NDK_SYS}'; cver='${CVER}'
+          content='''[binaries]
+          ar     = '{ndk_bin}/llvm-ar'
+          c      = ['ccache', '{ndk_bin}/aarch64-linux-android{cver}-clang', '--sysroot={ndk_sys}']
+          cpp    = ['ccache', '{ndk_bin}/aarch64-linux-android{cver}-clang++', '--sysroot={ndk_sys}']
+          c_ld   = 'lld'
+          cpp_ld = 'lld'
+          strip  = '{ndk_bin}/llvm-strip'
+          pkgconfig = '/usr/bin/pkg-config'
 
-[host_machine]
-system     = 'android'
-cpu_family = 'aarch64'
-cpu        = 'armv8'
-endian     = 'little'
+          [host_machine]
+          system     = 'android'
+          cpu_family = 'aarch64'
+          cpu        = 'armv8'
+          endian     = 'little'
 
-[built-in options]
-c_args        = ['-D__ANDROID__', '-Wno-error', '-Wno-deprecated-declarations', '-O2', '-DNDEBUG']
-cpp_args      = ['-D__ANDROID__', '-Wno-error', '-Wno-deprecated-declarations', '-O2', '-DNDEBUG']
-c_link_args   = ['-static-libstdc++', '-Wl,--gc-sections']
-cpp_link_args = ['-static-libstdc++', '-Wl,--gc-sections']
-CROSSEOF
-
-          # Replace placeholders with actual paths
-          sed -i "s|NDK_BIN_PLACEHOLDER|${NDK_BIN}|g" cross-aarch64-android.txt
-          sed -i "s|NDK_SYS_PLACEHOLDER|${NDK_SYS}|g" cross-aarch64-android.txt
-          sed -i "s|CVER_PLACEHOLDER|${CVER}|g" cross-aarch64-android.txt
+          [built-in options]
+          c_args        = ['-D__ANDROID__', '-Wno-error', '-Wno-deprecated-declarations', '-O2', '-DNDEBUG']
+          cpp_args      = ['-D__ANDROID__', '-Wno-error', '-Wno-deprecated-declarations', '-O2', '-DNDEBUG']
+          c_link_args   = ['-static-libstdc++', '-Wl,--gc-sections']
+          cpp_link_args = ['-static-libstdc++', '-Wl,--gc-sections']
+          '''.format(ndk_bin=ndk_bin, ndk_sys=ndk_sys, cver=cver)
+          import textwrap
+          with open('cross-aarch64-android.txt', 'w') as f:
+              f.write(textwrap.dedent(content))
+          "
 
           echo "Cross file created"
           cat cross-aarch64-android.txt
