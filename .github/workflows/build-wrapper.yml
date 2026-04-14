@@ -113,37 +113,69 @@ jobs:
           [[ ! -f "${NDK_BIN}/aarch64-linux-android${CVER}-clang" ]] && CVER="28"
           [[ ! -f "${NDK_BIN}/aarch64-linux-android${CVER}-clang" ]] && CVER="26"
 
-          cat > cross-aarch64-android.txt << EOF
-          [binaries]
-          ar     = '${NDK_BIN}/llvm-ar'
-          c      = ['ccache', '${NDK_BIN}/aarch64-linux-android${CVER}-clang', '--sysroot=${NDK_SYS}']
-          cpp    = ['ccache', '${NDK_BIN}/aarch64-linux-android${CVER}-clang++', '--sysroot=${NDK_SYS}']
-          c_ld   = 'lld'
-          cpp_ld = 'lld'
-          strip  = '${NDK_BIN}/llvm-strip'
-          pkgconfig = '/usr/bin/pkg-config'
+          cat > cross-aarch64-android.txt << 'CROSSEOF'
+[binaries]
+ar     = 'NDK_BIN_PLACEHOLDER/llvm-ar'
+c      = ['ccache', 'NDK_BIN_PLACEHOLDER/aarch64-linux-androidCVER_PLACEHOLDER-clang', '--sysroot=NDK_SYS_PLACEHOLDER']
+cpp    = ['ccache', 'NDK_BIN_PLACEHOLDER/aarch64-linux-androidCVER_PLACEHOLDER-clang++', '--sysroot=NDK_SYS_PLACEHOLDER']
+c_ld   = 'lld'
+cpp_ld = 'lld'
+strip  = 'NDK_BIN_PLACEHOLDER/llvm-strip'
+pkgconfig = '/usr/bin/pkg-config'
 
-          [host_machine]
-          system     = 'android'
-          cpu_family = 'aarch64'
-          cpu        = 'armv8'
-          endian     = 'little'
+[host_machine]
+system     = 'android'
+cpu_family = 'aarch64'
+cpu        = 'armv8'
+endian     = 'little'
 
-          [built-in options]
-          c_args        = ['-D__ANDROID__', '-Wno-error', '-Wno-deprecated-declarations', '-O2', '-DNDEBUG']
-          cpp_args      = ['-D__ANDROID__', '-Wno-error', '-Wno-deprecated-declarations', '-O2', '-DNDEBUG']
-          c_link_args   = ['-static-libstdc++', '-Wl,--gc-sections']
-          cpp_link_args = ['-static-libstdc++', '-Wl,--gc-sections']
-          EOF
+[built-in options]
+c_args        = ['-D__ANDROID__', '-Wno-error', '-Wno-deprecated-declarations', '-O2', '-DNDEBUG']
+cpp_args      = ['-D__ANDROID__', '-Wno-error', '-Wno-deprecated-declarations', '-O2', '-DNDEBUG']
+c_link_args   = ['-static-libstdc++', '-Wl,--gc-sections']
+cpp_link_args = ['-static-libstdc++', '-Wl,--gc-sections']
+CROSSEOF
+
+          # Replace placeholders with actual paths
+          sed -i "s|NDK_BIN_PLACEHOLDER|${NDK_BIN}|g" cross-aarch64-android.txt
+          sed -i "s|NDK_SYS_PLACEHOLDER|${NDK_SYS}|g" cross-aarch64-android.txt
+          sed -i "s|CVER_PLACEHOLDER|${CVER}|g" cross-aarch64-android.txt
 
           echo "Cross file created"
           cat cross-aarch64-android.txt
+
+      - name: Setup SPIRV subprojects
+        run: |
+          cd "$WRAPPER_DIR"
+          mkdir -p subprojects
+          for proj in spirv-tools spirv-headers; do
+            if [ ! -d "subprojects/$proj" ]; then
+              echo "Cloning $proj..."
+              git clone --depth=1 "https://github.com/KhronosGroup/${proj}.git" "subprojects/$proj"
+            fi
+          done
+          echo "Subprojects ready"
+
+      - name: Inspect meson build options
+        run: |
+          cd "$WRAPPER_DIR"
+          echo "=== meson_options.txt ==="
+          cat meson_options.txt 2>/dev/null | head -100 || echo "(not found)"
+          echo ""
+          echo "=== Searching for wrapper build target ==="
+          grep -r "vulkan_wrapper\|libvulkan_wrapper" meson.build src/*/meson.build 2>/dev/null | head -30 || true
+          echo ""
+          echo "=== Checking vulkan-drivers options ==="
+          grep -r "vulkan.drivers\|vulkan-drivers\|wrapper" meson_options.txt meson.build 2>/dev/null | head -20 || true
 
       - name: Configure Meson build
         run: |
           cd "$WRAPPER_DIR"
           TYPE="${{ inputs.build_type || 'release' }}"
 
+          # The leegao wrapper fork builds libvulkan_wrapper.so as a custom
+          # target in the Mesa build tree. We need to enable the right drivers
+          # and let the fork's meson.build handle the rest.
           meson setup build \
             --cross-file "${{ github.workspace }}/cross-aarch64-android.txt" \
             -Dbuildtype="$TYPE" \
@@ -151,7 +183,8 @@ jobs:
             -Dplatform-sdk-version="${{ inputs.api_level || env.API_LEVEL }}" \
             -Dandroid-stub=true \
             -Dgallium-drivers= \
-            -Dvulkan-drivers= \
+            -Dvulkan-drivers=freedreno \
+            -Dfreedreno-kmds=kgsl \
             -Degl=disabled \
             -Dglx=disabled \
             -Dgles1=disabled \
@@ -166,6 +199,7 @@ jobs:
             -Dbuild-tests=false \
             -Dwerror=false \
             -Ddefault_library=shared \
+            --force-fallback-for=spirv-tools,spirv-headers \
             2>&1 | tee meson-configure.log
 
           echo ""
@@ -177,18 +211,25 @@ jobs:
           ninja -C build -j$(nproc) 2>&1 | tee build.log
 
           echo ""
-          echo "Build artifacts:"
-          find build -name "libvulkan_wrapper*" -o -name "*.spv" | sort
-          find build -name "libvulkan_wrapper*" -exec ls -lh {} \;
+          echo "Build artifacts (.so files):"
+          find build -name "*.so" -type f | sort
+          echo ""
+          echo "Build artifacts (wrapper-related):"
+          find build -name "*wrapper*" -o -name "*vulkan*freedreno*" | sort
+          find build -name "*.so" -exec ls -lh {} \; | sort -k5 -h
 
       - name: Package wrapper.tzst
         run: |
           cd "$WRAPPER_DIR"
 
+          # The fork may produce libvulkan_wrapper.so or libvulkan_freedreno.so
           SO=$(find build -name "libvulkan_wrapper.so" -type f | head -1)
           if [ -z "$SO" ]; then
-            echo "ERROR: libvulkan_wrapper.so not found"
-            find build -name "*.so" | sort
+            SO=$(find build -name "libvulkan_freedreno.so" -type f | head -1)
+          fi
+          if [ -z "$SO" ]; then
+            echo "ERROR: No vulkan .so found. All .so files:"
+            find build -name "*.so" -type f -exec ls -lh {} \;
             exit 1
           fi
 
