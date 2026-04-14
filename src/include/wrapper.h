@@ -5,6 +5,13 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* VK_LAYER_EXPORT is not defined in all NDK versions of vk_layer.h.
+   Define it as default visibility so exported layer entry points are
+   visible in the shared library. */
+#ifndef VK_LAYER_EXPORT
+#define VK_LAYER_EXPORT __attribute__((visibility("default")))
+#endif
+
 #define WRAPPER_VERSION_MAJOR  2
 #define WRAPPER_VERSION_MINOR  0
 #define WRAPPER_VERSION_PATCH  0
