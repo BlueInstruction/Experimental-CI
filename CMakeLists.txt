@@ -9,6 +9,7 @@ set(CMAKE_SHARED_LINKER_FLAGS
 
 find_library(LOG_LIB     log     REQUIRED)
 find_library(ANDROID_LIB android REQUIRED)
+find_library(VULKAN_LIB  vulkan  REQUIRED)
 
 set(GLSLC "" CACHE STRING "Path to glslc shader compiler")
 if(NOT GLSLC)
@@ -73,6 +74,7 @@ target_link_options(vulkan_wrapper PRIVATE
 target_link_libraries(vulkan_wrapper PRIVATE
     ${LOG_LIB}
     ${ANDROID_LIB}
+    ${VULKAN_LIB}
 )
 
 set_target_properties(vulkan_wrapper PROPERTIES
