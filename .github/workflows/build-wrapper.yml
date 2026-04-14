@@ -129,11 +129,7 @@ jobs:
           cpp_args      = ['-D__ANDROID__', '-Wno-error', '-Wno-deprecated-declarations', '-O2', '-DNDEBUG']
           c_link_args   = ['-static-libstdc++', '-Wl,--gc-sections']
           cpp_link_args = ['-static-libstdc++', '-Wl,--gc-sections']
-          '''.format(ndk_bin=ndk_bin, ndk_sys=ndk_sys, cver=cver)
-          import textwrap
-          with open('cross-aarch64-android.txt', 'w') as f:
-              f.write(textwrap.dedent(content))
-          "
+          EOF
 
           echo "Cross file created"
           cat cross-aarch64-android.txt
@@ -187,9 +183,6 @@ jobs:
           cd "$WRAPPER_DIR"
           TYPE="${{ inputs.build_type || 'release' }}"
 
-          # The leegao wrapper fork builds libvulkan_wrapper.so as a custom
-          # target in the Mesa build tree. We need to enable the right drivers
-          # and let the fork's meson.build handle the rest.
           meson setup build \
             --cross-file "${{ github.workspace }}/cross-aarch64-android.txt" \
             -Dbuildtype="$TYPE" \
