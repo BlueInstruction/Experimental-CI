@@ -65,15 +65,21 @@ log_section() { echo -e "\n${BOLD}── $* ──${NC}"; }
 WORKDIR="${GITHUB_WORKSPACE:-$(pwd)}/build"
 MESA_DIR="${WORKDIR}/mesa"
 PATCHES_DIR="$(pwd)/patches"
+revert-13-pr
 
 # ── Source repositories ────────────────────────────────────────────────────────
+
+main
 MESA_REPO="https://github.com/BlueInstruction/mesa-for-android-container.git"
 MESA_BRANCH_DEFAULT="adreno-main"
 MESA_MIRROR="https://gitlab.freedesktop.org/mesa/mesa.git"
 TURNIP_CI_REPO="https://github.com/whitebelyash/freedreno_turnip-CI.git"
 VULKAN_HEADERS_REPO="https://github.com/KhronosGroup/Vulkan-Headers.git"
 
+revert-13-pr
 # ── Build configuration ───────────────────────────────────────────────────────
+
+main
 MESA_SOURCE="${MESA_SOURCE:-adreno_main}"
 STAGING_BRANCH="${STAGING_BRANCH:-staging/26.0}"
 CUSTOM_TAG="${CUSTOM_TAG:-}"
@@ -225,6 +231,40 @@ clone_mesa() {
                 done
             fi
             rm -rf "$ci_dir"
+        fi
+    fi
+
+    # For clean_main, fetch and apply freedreno_turnip-CI patches
+    if [[ "$MESA_SOURCE" == "clean_main" ]]; then
+        log_info "Fetching freedreno_turnip-CI patches..."
+        local ci_dir="${WORKDIR}/turnip-ci"
+        if git clone --depth=1 "$TURNIP_CI_REPO" "$ci_dir" 2>/dev/null; then
+            # Apply .patch files from the CI repo's patches directory
+            local patch_dir=""
+            for try_dir in "$ci_dir/patches" "$ci_dir/patch" "$ci_dir"; do
+                if compgen -G "${try_dir}/*.patch" >/dev/null 2>&1; then
+                    patch_dir="$try_dir"
+                    break
+                fi
+            done
+            if [[ -n "$patch_dir" ]]; then
+                log_info "Applying freedreno_turnip-CI patches from $patch_dir"
+                for p in $(find "$patch_dir" -maxdepth 1 -name '*.patch' | sort); do
+                    local pname
+                    pname=$(basename "$p")
+                    if git apply --check "$p" 2>/dev/null; then
+                        git apply "$p"
+                        log_success "Applied: $pname"
+                    else
+                        log_warn "Skipped (doesn't apply cleanly): $pname"
+                    fi
+                done
+            else
+                log_warn "No .patch files found in freedreno_turnip-CI"
+            fi
+            rm -rf "$ci_dir"
+        else
+            log_warn "Failed to clone freedreno_turnip-CI, continuing without patches"
         fi
     fi
 
