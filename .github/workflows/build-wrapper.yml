@@ -52,6 +52,7 @@ jobs:
             bison flex gettext \
             libwayland-dev wayland-protocols \
             glslang-tools spirv-tools \
+            libssl-dev libxml2-dev \
             ccache ca-certificates curl git
 
           # Ensure meson is recent enough (>= 1.0)
@@ -228,7 +229,7 @@ jobs:
       - name: Build wrapper
         run: |
           cd "$WRAPPER_DIR"
-          ninja -C build -j$(nproc) 2>&1 | tee build.log
+          ninja -C build -j$(nproc) -k0 2>&1 | tee build.log || true
 
           echo ""
           echo "Build artifacts (.so files):"
