@@ -11,6 +11,9 @@ on:
         options: [release, debug, debugoptimized]
 
 env:
+  NDK_VERSION: 'android-ndk-r27c'
+  NDK_URL: 'https://dl.google.com/android/repository/android-ndk-r27c-linux.zip'
+  API_LEVEL: '28'
   WRAPPER_REPO: 'https://github.com/BlueInstruction/bionic-vulkan-wrapper.git'
   WRAPPER_BRANCH: 'wrapper'
   TERMUX_PKG_REPO: 'https://github.com/leegao/vulkan_wrapper_termux-packages.git'
@@ -97,7 +100,7 @@ jobs:
           NDK="/opt/android-ndk"
           NDK_BIN="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin"
           NDK_SYS="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          API="${{ inputs.api_level || env.API_LEVEL }}"
+          API="${{ env.API_LEVEL }}"
 
           # Find the right clang version
           CVER="$API"
@@ -191,7 +194,7 @@ jobs:
             --cross-file "${{ github.workspace }}/cross-aarch64-android.txt" \
             -Dbuildtype="$TYPE" \
             -Dplatforms=android \
-            -Dplatform-sdk-version="${{ inputs.api_level || env.API_LEVEL }}" \
+            -Dplatform-sdk-version="${{ env.API_LEVEL }}" \
             -Dandroid-stub=true \
             -Dgallium-drivers= \
             -Dvulkan-drivers=freedreno \
@@ -329,7 +332,7 @@ jobs:
           printf "  ║  %-20s : %-35s ║\n" "wrapper.tzst"      "$TZST_SIZE"
           printf "  ║  %-20s : %-35s ║\n" "Commit"            "$COMMIT"
           printf "  ║  %-20s : %-35s ║\n" "NDK"               "${{ env.NDK_VERSION }}"
-          printf "  ║  %-20s : %-35s ║\n" "API Level"         "${{ inputs.api_level || env.API_LEVEL }}"
+          printf "  ║  %-20s : %-35s ║\n" "API Level"         "${{ env.API_LEVEL }}"
           printf "  ║  %-20s : %-35s ║\n" "Build Type"        "${{ inputs.build_type || 'release' }}"
           echo "  ╠═══════════════════════════════════════════════════════════╣"
           echo "  ║  Drop wrapper.tzst into:                                 ║"
