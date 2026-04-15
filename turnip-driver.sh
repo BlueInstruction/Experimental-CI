@@ -65,21 +65,17 @@ log_section() { echo -e "\n${BOLD}── $* ──${NC}"; }
 WORKDIR="${GITHUB_WORKSPACE:-$(pwd)}/build"
 MESA_DIR="${WORKDIR}/mesa"
 PATCHES_DIR="$(pwd)/patches"
-revert-13-pr
 
 # ── Source repositories ────────────────────────────────────────────────────────
 
-main
 MESA_REPO="https://github.com/BlueInstruction/mesa-for-android-container.git"
 MESA_BRANCH_DEFAULT="adreno-main"
 MESA_MIRROR="https://gitlab.freedesktop.org/mesa/mesa.git"
 TURNIP_CI_REPO="https://github.com/whitebelyash/freedreno_turnip-CI.git"
 VULKAN_HEADERS_REPO="https://github.com/KhronosGroup/Vulkan-Headers.git"
 
-revert-13-pr
 # ── Build configuration ───────────────────────────────────────────────────────
 
-main
 MESA_SOURCE="${MESA_SOURCE:-adreno_main}"
 STAGING_BRANCH="${STAGING_BRANCH:-staging/26.0}"
 CUSTOM_TAG="${CUSTOM_TAG:-}"
@@ -1345,17 +1341,11 @@ package_driver() {
     "description": "Mesa Turnip (Freedreno) — Adreno A7xx FOSS Vulkan — KGSL — Android ${API_LEVEL}",
     "author": "BlueInstruction",
     "packageVersion": "${BUILD_NUMBER}",
-    "vendor": "Mesa / Qualcomm Freedreno (Igalia/Valve)",
+    "vendor": "Mesa / Freedreno (Igalia/Valve)",
     "driverVersion": "${vulkan_version}",
     "mesaVersion": "${clean_version}",
     "minApi": 28,
     "libraryName": "${driver_name}",
-    "buildDate": "${build_date}",
-    "commit": "${commit}",
-    "targetHardware": "Adreno 730/740/750 (Snapdragon 8 Gen 1/2/3)",
-    "dxvkSupport": "DX9/DX10/DX11 via DXVK",
-    "vkd3dSupport": "DX12 FL12_1 via VKD3D-Proton",
-    "reference": "Qualcomm GDG 80-78185-2 AL"
 }
 EOF
 
