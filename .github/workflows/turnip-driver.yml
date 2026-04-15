@@ -6,8 +6,10 @@ on:
       mesa_source:
         type: choice
         description: "Mesa source"
-        default: "main_branch"
+        default: "adreno_main"
         options:
+          - adreno_main
+          - clean_main
           - latest_release
           - staging_branch
           - main_branch
@@ -66,10 +68,10 @@ on:
         description: "Apply patch series from patches/series/ if present"
         default: true
 
-      enable_perf:
-        type: boolean
-        description: "Enable freedreno performance options"
-        default: false
+      build_number:
+        description: "Build number (e.g. 1, 2, 3) — used in filename Turnip_v{version}-B{number}"
+        required: false
+        default: "1"
 
 permissions:
   contents: write
@@ -115,7 +117,7 @@ jobs:
         id: build
         run: |
           chmod +x turnip-driver.sh
-          export MESA_SOURCE="${{ inputs.mesa_source || 'main_branch' }}"
+          export MESA_SOURCE="${{ inputs.mesa_source || 'adreno_main' }}"
           export STAGING_BRANCH="${{ inputs.staging_branch || 'staging/26.0' }}"
           export CUSTOM_TAG="${{ inputs.custom_tag || '' }}"
           export BUILD_TYPE="${{ inputs.build_type || 'release' }}"
@@ -126,7 +128,7 @@ jobs:
           export ENABLE_TIMELINE_HACK="${{ github.event.inputs.enable_timeline_hack != '' && github.event.inputs.enable_timeline_hack || 'true' }}"
           export ENABLE_UBWC_HACK="${{ github.event.inputs.enable_ubwc_hack != '' && github.event.inputs.enable_ubwc_hack || 'true' }}"
           export APPLY_PATCH_SERIES="${{ github.event.inputs.apply_patch_series != '' && github.event.inputs.apply_patch_series || 'true' }}"
-          export ENABLE_PERF="${{ github.event.inputs.enable_perf != '' && github.event.inputs.enable_perf || 'false' }}"
+          export BUILD_NUMBER="${{ inputs.build_number || '1' }}"
 
           bash turnip-driver.sh
 

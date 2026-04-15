@@ -12,15 +12,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build patchelf unzip flex bison git perl python3-pip python3-venv glslang-tools
-          python3 -m venv /tmp/meson-venv
-          /tmp/meson-venv/bin/pip install meson mako packaging pyyaml
-          echo "PATH=/tmp/meson-venv/bin:${PATH}" >> "$GITHUB_ENV"
+          sudo apt-get install -y ninja-build patchelf unzip flex bison git perl python3-pip glslang-tools
+          pip3 install --upgrade meson mako
 
       - name: Build Driver
         run: |
@@ -38,15 +36,3 @@ jobs:
         with:
           name: driver-turnip-backup
           path: ${{ env.ZIP_PATH }}
-
-      - name: Publish Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ env.TAG_NAME }}
-          name: ${{ env.RELEASE_NAME }}
-          body_path: turnip_workdir/description
-          files: ${{ env.ZIP_PATH }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

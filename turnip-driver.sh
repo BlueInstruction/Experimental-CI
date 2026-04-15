@@ -15,26 +15,40 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 WORKDIR="${GITHUB_WORKSPACE:-$(pwd)}/build"
 MESA_DIR="${WORKDIR}/mesa"
 PATCHES_DIR="$(pwd)/patches"
-MESA_REPO="https://gitlab.freedesktop.org/mesa/mesa.git"
-MESA_MIRROR="https://github.com/mesa3d/mesa.git"
+MESA_REPO="https://github.com/BlueInstruction/mesa-for-android-container.git"
+MESA_BRANCH_DEFAULT="adreno-main"
+MESA_MIRROR="https://gitlab.freedesktop.org/mesa/mesa.git"
+TURNIP_CI_REPO="https://github.com/whitebelyash/freedreno_turnip-CI.git"
 VULKAN_HEADERS_REPO="https://github.com/KhronosGroup/Vulkan-Headers.git"
 
-MESA_SOURCE="${MESA_SOURCE:-main_branch}"
+MESA_SOURCE="${MESA_SOURCE:-adreno_main}"
 STAGING_BRANCH="${STAGING_BRANCH:-staging/26.0}"
 CUSTOM_TAG="${CUSTOM_TAG:-}"
 BUILD_TYPE="${BUILD_TYPE:-release}"
 BUILD_VARIANT="${BUILD_VARIANT:-optimized}"
 NDK_PATH="${NDK_PATH:-/opt/android-ndk}"
 API_LEVEL="${API_LEVEL:-35}"
-ENABLE_PERF="${ENABLE_PERF:-false}"
 ENABLE_TIMELINE_HACK="${ENABLE_TIMELINE_HACK:-true}"
 ENABLE_UBWC_HACK="${ENABLE_UBWC_HACK:-true}"
 ENABLE_DECK_EMU="${ENABLE_DECK_EMU:-true}"
 APPLY_PATCH_SERIES="${APPLY_PATCH_SERIES:-true}"
+BUILD_NUMBER="${BUILD_NUMBER:-1}"
 
-CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
-CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
-LDFLAGS_EXTRA="${LDFLAGS_EXTRA:--Wl,--gc-sections}"
+# Performance compiler flags for Adreno 750 (Cortex-X4 / ARMv8.2-a)
+# -O3                     Maximum optimization
+# -march=armv8.2-a+...    Target Snapdragon 8 Gen 3 ISA features
+# -ffast-math              Fast floating-point (significant GPU driver speedup)
+# -fno-finite-math-only    Keep NaN/Inf handling (prevents rendering bugs)
+# -fno-math-errno          Don't set errno on math ops (reduces overhead)
+# -fno-trapping-math       Assume no FP traps (enables more optimizations)
+# -DNDEBUG                 Strip all assert() calls from release build
+CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-math-errno -fno-trapping-math -DNDEBUG}"
+CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-math-errno -fno-trapping-math -DNDEBUG}"
+# Linker flags:
+# --gc-sections            Strip dead code
+# --icf=safe               Merge identical functions (smaller + faster)
+# -O2                      Linker optimization level 2
+LDFLAGS_EXTRA="${LDFLAGS_EXTRA:--Wl,--gc-sections -Wl,--icf=safe -Wl,-O2}"
 
 check_deps() {
     local deps="git meson ninja patchelf zip ccache curl python3"
@@ -48,8 +62,10 @@ check_deps() {
 }
 
 fetch_latest_release() {
+    # Query upstream Mesa (gitlab/mirror) for latest release tag
+    local upstream="https://gitlab.freedesktop.org/mesa/mesa.git"
     local tags=""
-    tags=$(git ls-remote --tags --refs "$MESA_REPO" 2>/dev/null | \
+    tags=$(git ls-remote --tags --refs "$upstream" 2>/dev/null | \
         grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1) || true
     if [[ -z "$tags" ]]; then
         tags=$(git ls-remote --tags --refs "$MESA_MIRROR" 2>/dev/null | \
@@ -87,6 +103,14 @@ prepare_workdir() {
 }
 
 update_vulkan_headers() {
+    # Skip header update for adreno_main — the fork ships compatible headers.
+    # Overwriting with latest upstream headers causes _EXT→_KHR rename mismatches
+    # (e.g. VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT removed in newer headers).
+    if [[ "$MESA_SOURCE" == "adreno_main" || "$MESA_SOURCE" == "clean_main" ]]; then
+        log_info "Skipping Vulkan headers update ($MESA_SOURCE uses its own compatible headers)"
+        return 0
+    fi
+
     log_info "Updating Vulkan headers"
     local headers_dir="${WORKDIR}/vulkan-headers"
     git clone --depth=1 "$VULKAN_HEADERS_REPO" "$headers_dir" 2>/dev/null || {
@@ -106,6 +130,18 @@ clone_mesa() {
     local target_ref=""
 
     case "$MESA_SOURCE" in
+        adreno_main)
+            # Primary: BlueInstruction/mesa-for-android-container adreno-main
+            # Clean Mesa with proper KGSL support for Adreno 750
+            target_ref="$MESA_BRANCH_DEFAULT"
+            clone_args=("--depth" "200" "--branch" "$target_ref")
+            ;;
+        clean_main)
+            # Upstream Mesa main + freedreno_turnip-CI patches
+            # Clean vanilla build with community patches applied
+            target_ref="main"
+            clone_args=("--depth" "200" "--branch" "main")
+            ;;
         latest_release)
             target_ref=$(fetch_latest_release)
             clone_args=("--depth" "1" "--branch" "$target_ref")
@@ -128,12 +164,23 @@ clone_mesa() {
             clone_args=("--depth" "1" "--branch" "$target_ref")
             ;;
     esac
-    log_info "Target: $target_ref"
+    log_info "Target: $target_ref from $MESA_SOURCE"
 
-    if ! git clone "${clone_args[@]}" "$MESA_REPO" "$MESA_DIR" 2>/dev/null; then
-        log_warn "Primary source failed, trying mirror"
+    # For clean_main, clone from upstream gitlab directly
+    local primary_repo="$MESA_REPO"
+    if [[ "$MESA_SOURCE" == "clean_main" ]]; then
+        primary_repo="$MESA_MIRROR"
+    fi
+
+    if ! git clone "${clone_args[@]}" "$primary_repo" "$MESA_DIR" 2>/dev/null; then
+        log_warn "Primary source ($primary_repo) failed, trying mirror"
+        # For adreno_main fallback, use upstream main
+        if [[ "$MESA_SOURCE" == "adreno_main" ]]; then
+            target_ref="main"
+            clone_args=("--depth" "200" "--branch" "main")
+        fi
         if ! git clone "${clone_args[@]}" "$MESA_MIRROR" "$MESA_DIR" 2>/dev/null; then
-            log_error "Failed to clone Mesa"
+            log_error "Failed to clone Mesa from any source"
             exit 1
         fi
     fi
@@ -143,6 +190,40 @@ clone_mesa() {
     git config user.name "Turnip CI Builder"
 
     [[ "$MESA_SOURCE" == "latest_main" ]] && git pull origin main
+
+    # For clean_main, fetch and apply freedreno_turnip-CI patches
+    if [[ "$MESA_SOURCE" == "clean_main" ]]; then
+        log_info "Fetching freedreno_turnip-CI patches..."
+        local ci_dir="${WORKDIR}/turnip-ci"
+        if git clone --depth=1 "$TURNIP_CI_REPO" "$ci_dir" 2>/dev/null; then
+            # Apply .patch files from the CI repo's patches directory
+            local patch_dir=""
+            for try_dir in "$ci_dir/patches" "$ci_dir/patch" "$ci_dir"; do
+                if compgen -G "${try_dir}/*.patch" >/dev/null 2>&1; then
+                    patch_dir="$try_dir"
+                    break
+                fi
+            done
+            if [[ -n "$patch_dir" ]]; then
+                log_info "Applying freedreno_turnip-CI patches from $patch_dir"
+                for p in $(find "$patch_dir" -maxdepth 1 -name '*.patch' | sort); do
+                    local pname
+                    pname=$(basename "$p")
+                    if git apply --check "$p" 2>/dev/null; then
+                        git apply "$p"
+                        log_success "Applied: $pname"
+                    else
+                        log_warn "Skipped (doesn't apply cleanly): $pname"
+                    fi
+                done
+            else
+                log_warn "No .patch files found in freedreno_turnip-CI"
+            fi
+            rm -rf "$ci_dir"
+        else
+            log_warn "Failed to clone freedreno_turnip-CI, continuing without patches"
+        fi
+    fi
 
     local version commit
     version=$(get_mesa_version)
@@ -393,9 +474,9 @@ for pat in [
             insert_at = close - 1
             heap_code = (
                 '\n   if (TU_DEBUG(DECK_EMU)) {\n'
-                '      /* A750_WIN_PROFILE: 20 GiB heap */\n'
+                '      /* A750_WIN_PROFILE: 2 GiB heap (realistic for KGSL) */\n'
                 f'      if ({param}->memoryProperties.memoryHeapCount > 0)\n'
-                f'         {param}->memoryProperties.memoryHeaps[0].size = 20479ULL * 1024ULL * 1024ULL;\n'
+                f'         {param}->memoryProperties.memoryHeaps[0].size = 2048ULL * 1024ULL * 1024ULL;\n'
                 '   }\n'
             )
             content = content[:insert_at] + '\n' + heap_code + content[insert_at:]
@@ -410,7 +491,7 @@ if not heap_injected:
     if m_hs:
         ln_end = content.find('\n', m_hs.end())
         if ln_end == -1: ln_end = len(content)
-        heap_code = '\n   if (TU_DEBUG(DECK_EMU)) {\n      /* A750_WIN_PROFILE: 20 GiB heap fallback */\n      pdevice->memory.memoryProperties.memoryHeaps[0].size = 20479ULL * 1024ULL * 1024ULL;\n   }\n'
+        heap_code = '\n   if (TU_DEBUG(DECK_EMU)) {\n      /* A750_WIN_PROFILE: 2 GiB heap fallback (realistic for KGSL) */\n      pdevice->memory.memoryProperties.memoryHeaps[0].size = 2048ULL * 1024ULL * 1024ULL;\n   }\n'
         content = content[:ln_end] + '\n' + heap_code + content[ln_end:]
         print('[OK] 20 GiB heap injected (fallback after memoryHeaps assignment)')
         applied += 1
@@ -712,7 +793,7 @@ A750_CORE = [
     "VK_QCOM_multiview_per_view_render_areas","VK_QCOM_multiview_per_view_viewports",
     "VK_QCOM_render_pass_shader_resolve","VK_QCOM_render_pass_store_ops",
     "VK_QCOM_render_pass_transform","VK_QCOM_rotated_copy_commands",
-    "VK_QCOM_tile_properties","VK_QCOM_queue_perf_hint",
+    "VK_QCOM_tile_properties",
 ]
 
 try:
@@ -896,12 +977,10 @@ configure_build() {
     [[ "$BUILD_VARIANT" == "debug" ]]   && buildtype="debug"
     [[ "$BUILD_VARIANT" == "profile" ]] && buildtype="debugoptimized"
 
-    local perf_args=""
-    [[ "$ENABLE_PERF" == "true" ]] && perf_args="-Dfreedreno-enable-perf=true"
-
     meson setup build                                   \
         --cross-file "${WORKDIR}/cross-aarch64.txt"    \
         -Dbuildtype="$buildtype"                        \
+        -Db_ndebug=true                                 \
         -Dplatforms=android                             \
         -Dplatform-sdk-version="$API_LEVEL"             \
         -Dandroid-stub=true                             \
@@ -923,7 +1002,6 @@ configure_build() {
         -Dbuild-tests=false                             \
         -Dwerror=false                                  \
         -Ddefault_library=shared                        \
-        $perf_args                                      \
         --force-fallback-for=spirv-tools,spirv-headers  \
         2>&1 | tee "${WORKDIR}/meson.log"
 
@@ -954,35 +1032,29 @@ package_driver() {
 
     local driver_src="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
     local pkg_dir="${WORKDIR}/package"
-    local driver_name="libvulkan.so"
+    local driver_name="vulkan.freedreno.so"
 
     mkdir -p "$pkg_dir"
     cp "$driver_src" "${pkg_dir}/${driver_name}"
-    patchelf --set-soname "libvulkan.so" "${pkg_dir}/${driver_name}"
+    patchelf --set-soname "vulkan.adreno.so" "${pkg_dir}/${driver_name}"
     "${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
         "${pkg_dir}/${driver_name}" 2>/dev/null || true
 
     local driver_size variant_suffix filename
     driver_size=$(du -h "${pkg_dir}/${driver_name}" | cut -f1)
 
-    case "$BUILD_VARIANT" in
-        optimized) variant_suffix="opt"     ;;
-        debug)     variant_suffix="debug"   ;;
-        profile)   variant_suffix="profile" ;;
-        vanilla)   variant_suffix="vanilla" ;;
-        *)         variant_suffix="opt"     ;;
-    esac
+    # Strip -devel suffix for clean version (26.1.0-devel → 26.1.0)
+    local clean_version="${version%-devel}"
 
-    filename="turnip_a750_v${version}_${variant_suffix}_${build_date}"
+    filename="Turnip_v${clean_version}-B${BUILD_NUMBER}"
 
     cat > "${pkg_dir}/meta.json" << EOF
 {
     "schemaVersion": 1,
-    "name": "Turnip A750 Windows-${build_date}"
-    ",
+    "name": "Turnip_v${clean_version}-B${BUILD_NUMBER}",
     "description": "Adreno 750 — Windows x86_64 identity",
     "author": "BlueInstruction",
-    "packageVersion": "1",
+    "packageVersion": "${BUILD_NUMBER}",
     "vendor": "Mesa",
     "driverVersion": "${vulkan_version}",
     "minApi": 28,
@@ -1006,31 +1078,27 @@ print_summary() {
     vulkan_version=$(cat "${WORKDIR}/vulkan_version.txt")
     build_date=$(cat "${WORKDIR}/build_date.txt")
     echo ""
+    local clean_version="${version%-devel}"
     log_info "Build Summary"
-    echo "  Profile        : Adreno 750 Windows x86_64"
-    echo "  vendorID       : 0x5143 (Qualcomm)"
-    echo "  deviceID       : 0x43a"
-    echo "  apiVersion     : 1.3.295"
-    echo "  Heap           : 20 GiB"
-    echo "  Extensions     : 149 (Windows A750)"
+    echo "  Package        : Turnip_v${clean_version}-B${BUILD_NUMBER}"
     echo "  Mesa Version   : $version"
     echo "  Vulkan Header  : $vulkan_version"
+    echo "  Build Number   : $BUILD_NUMBER"
     echo "  Commit         : $commit"
     echo "  Build Date     : $build_date"
     echo "  Build Variant  : $BUILD_VARIANT"
     echo "  Source         : $MESA_SOURCE"
-    echo "  Performance    : $ENABLE_PERF"
+    echo "  Heap           : 2 GiB (KGSL realistic)"
     echo "  Deck Emu       : $ENABLE_DECK_EMU"
     echo "  Timeline Hack  : $ENABLE_TIMELINE_HACK"
     echo "  UBWC Hack      : $ENABLE_UBWC_HACK"
-    echo "  Patch Series   : $APPLY_PATCH_SERIES"
     echo "  Output         :"
     ls -lh "${WORKDIR}"/*.zip 2>/dev/null | awk '{print "    " $9 " (" $5 ")"}'
     echo ""
 }
 
 main() {
-    log_info "Turnip Driver Builder — Adreno 750 Windows"
+    log_info "Turnip Driver Builder — Adreno 750 Windows Profile"
     log_info "Variant: $BUILD_VARIANT | Source: $MESA_SOURCE"
 
     check_deps
