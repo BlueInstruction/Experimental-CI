@@ -231,13 +231,14 @@ jobs:
                   except Exception as e:
                       errors.append(f"Write error {path}: {e}")
 
-          # === D3D12 FEATURE FLAGS — accurate for Adreno 750 / Turnip ===
+          # GPU identity: Qualcomm Snapdragon X2 Elite — Adreno X2
+          # Ref: Qualcomm GDG 80-78185-2 AL
           # SM 6.6 / FL 12.1 — accurate for Adreno 7xx
           # DoublePrecisionFloatShaderOps stays FALSE (set below)
           gpu = [
               (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x5143;'),
               (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x43a;'),
-              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>20479ULL * 1024 * 1024;'),
+              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>2048ULL * 1024 * 1024;'),
               (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096ULL * 1024 * 1024;'),
           ]
 
