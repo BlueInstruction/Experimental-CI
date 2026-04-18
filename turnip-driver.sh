@@ -71,7 +71,7 @@ PATCHES_DIR="$(pwd)/patches"
 MESA_REPO="https://github.com/BlueInstruction/mesa-for-android-container.git"
 MESA_BRANCH_DEFAULT="adreno-main"
 MESA_MIRROR="https://gitlab.freedesktop.org/mesa/mesa.git"
-TURNIP_CI_REPO="https://github.com/whitebelyash/freedreno_turnip-CI.git"
+TURNIP_CI_REPO="https://github.com/whitebelyash/mesa-tu8.git"
 VULKAN_HEADERS_REPO="https://github.com/KhronosGroup/Vulkan-Headers.git"
 
 # ── Build configuration ───────────────────────────────────────────────────────
@@ -1319,7 +1319,7 @@ package_driver() {
 
     local driver_src="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
     local pkg_dir="${WORKDIR}/package"
-    local driver_name="vulkan.freedreno.so"
+    local driver_name="libvulkan_freedreno.so"
 
     mkdir -p "$pkg_dir"
     cp "$driver_src" "${pkg_dir}/${driver_name}"
@@ -1338,10 +1338,10 @@ package_driver() {
 {
     "schemaVersion": 1,
     "name": "${filename}",
-    "description": "Mesa Turnip (Freedreno) — Adreno A7xx FOSS Vulkan — KGSL — Android ${API_LEVEL}",
+    "description": "",
     "author": "BlueInstruction",
     "packageVersion": "${BUILD_NUMBER}",
-    "vendor": "Mesa / Freedreno (Igalia/Valve)",
+    "vendor": "Mesa",
     "driverVersion": "${vulkan_version}",
     "mesaVersion": "${clean_version}",
     "minApi": 28,
