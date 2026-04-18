@@ -1265,8 +1265,7 @@ configure_build() {
     meson setup build                                    \
         --cross-file "${WORKDIR}/cross-aarch64.txt"     \
         -Dbuildtype="$buildtype"                         \
-        -Db_ndebug=true                                  \
-        -Db_lto=true                                     \
+        -Db_ndebug=true                                  \                                  \
         -Dplatforms=android                              \
         -Dplatform-sdk-version="$API_LEVEL"              \
         -Dandroid-stub=true                              \
