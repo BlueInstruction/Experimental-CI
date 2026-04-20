@@ -612,20 +612,18 @@ jobs:
               with open(f, "r", encoding="utf-8") as fh:
                   c = fh.read()
               orig = c
-              # Downgrade ERR to WARN for non-fatal submission errors
-              # Keep ERR for truly fatal ones like "out of memory"
-              for pat in [
-                  r'ERR\("Failed to wait for fence',
-                  r'ERR\("Failed to submit',
-                  r'ERR\("Failed to signal',
-                  r'ERR\("Fence wait timeout',
-                  r'ERR\("Queue submit failed',
+              # Use string replace (not regex) to avoid backslash escaping issues
+              for old_str in [
+                  'ERR("Failed to wait for fence',
+                  'ERR("Failed to submit',
+                  'ERR("Failed to signal',
+                  'ERR("Fence wait timeout',
+                  'ERR("Queue submit failed',
               ]:
-                  c = re.sub(pat, pat.replace('ERR', 'WARN', 1), c)
+                  c = c.replace(old_str, old_str.replace('ERR(', 'WARN(', 1))
               if c != orig:
                   with open(f, "w", encoding="utf-8") as fh:
                       fh.write(c)
-                  n = sum(1 for a, b in zip(orig, c) if a != b)
                   count += 1
                   print(f"ERR→WARN downgrade: {os.path.basename(f)}")
           print(f"Command submit ERR downgrade: {count} file(s) patched")
