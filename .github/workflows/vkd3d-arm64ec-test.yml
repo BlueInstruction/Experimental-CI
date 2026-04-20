@@ -297,14 +297,7 @@ jobs:
                   group_stats[group]["files"].append(f"{os.path.basename(path)}:{count}")
               return count
 
-          # GPU identity: Qualcomm Snapdragon X2 Elite — Adreno X2
-          # Only patch DXGI adapter descriptor fields (safe — not used in conditionals)
-          gpu = [
-              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
-              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
-              (r'(dedicated_video_memory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
-              (r'(shared_system_memory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
-          ]
+
 
           dev = [
               (r'(\.UMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -357,12 +350,6 @@ jobs:
               (r'(->use_tile_based_rendering\s*=\s*)false', r'\1true'),
           ]
 
-          # Fsync — match config flag table entries and timeline_semaphore assignments
-          fsync_patches = [
-              (r'("timeline_semaphore"\s*,)', r'\1 /* fsync patched */'),
-              (r'(timeline_semaphore\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>true; /* fsync patched */'),
-          ]
-
           uma_patches = [
               (r'(VKD3D_CONFIG_FLAG_FORCE_HOST_CACHED)', r'\1 /* uma patched */'),
           ]
@@ -392,8 +379,7 @@ jobs:
               (r'(concurrent_queue_family_image_count\s*(?<!=)=(?!=)\s*)\d+', r'\g<1>0 /* patched */'),
           ]
 
-          # === APPLY PATCHES WITH GROUP ATTRIBUTION ===
-          patch_file("libs/vkd3d/device.c", gpu, "gpu_identity")
+          # === APPLY PATCHES ===
           patch_file("libs/vkd3d/device.c", dev, "dev_features")
           patch_file("libs/vkd3d/device.c", uma_patches, "uma")
           patch_file("libs/vkd3d/device.c", tbr_patches, "tbr")
@@ -401,99 +387,7 @@ jobs:
           patch_file("libs/vkd3d/device.c", gpu_boost_patches, "gpu_boost")
           patch_file("libs/vkd3d/swapchain.c", swapchain_patches, "swapchain")
           patch_file("libs/vkd3d/swapchain.c", swapchain_blit_safety, "blit_safety")
-          patch_file("libs/vkd3d/command.c", fsync_patches, "fsync")
           patch_file("libs/vkd3d/command.c", submission_patches, "submission")
-
-          # Scoped file walk for remaining patterns
-          for root, dirs, files in os.walk("libs/vkd3d"):
-              for f in files:
-                  if not f.endswith((".c", ".h")):
-                      continue
-                  path = os.path.join(root, f)
-                  if f in ("device.c", "swapchain.c", "command.c"):
-                      continue
-                  if any(k in f for k in ["adapter", "feature", "caps", "d3d12"]):
-                      patch_file(path, gpu, "gpu_identity")
-                  if "private" in f:
-                      patch_file(path, tbr_patches, "tbr")
-
-          vkd3d_private = "libs/vkd3d/vkd3d_private.h"
-          if os.path.exists(vkd3d_private):
-              with open(vkd3d_private, "r") as f:
-                  content = f.read()
-              if "VKD3D_FSYNC_ENABLED" not in content:
-                  header = """
-          #ifndef VKD3D_FSYNC_ENABLED
-          #define VKD3D_FSYNC_ENABLED 1
-          #endif
-          #ifndef VKD3D_ESYNC_ENABLED
-          #define VKD3D_ESYNC_ENABLED 1
-          #endif
-          #ifndef VKD3D_FENCE_SPIN_COUNT
-          #define VKD3D_FENCE_SPIN_COUNT 32
-          #endif
-          #ifndef VKD3D_TIMELINE_SEM_FAST_PATH
-          #define VKD3D_TIMELINE_SEM_FAST_PATH 1
-          #endif
-          #ifndef VKD3D_SKIP_REDUNDANT_FENCE_WAIT
-          #define VKD3D_SKIP_REDUNDANT_FENCE_WAIT 1
-          #endif
-          #ifndef VKD3D_UMA_FORCE_HOST_CACHED
-          #define VKD3D_UMA_FORCE_HOST_CACHED 1
-          #endif
-          #ifndef VKD3D_MFG_X6_SWAPCHAIN_DEPTH
-          #define VKD3D_MFG_X6_SWAPCHAIN_DEPTH 3
-          #endif
-          #ifndef VKD3D_RENDER_PASS_FORCE
-          #define VKD3D_RENDER_PASS_FORCE 1
-          #endif
-          #ifndef VKD3D_TBR_ADRENO
-          #define VKD3D_TBR_ADRENO 1
-          #endif
-          #ifndef VKD3D_GPU_BOOST
-          #define VKD3D_GPU_BOOST 1
-          #endif
-          #ifndef VKD3D_HEAVY_GAME_MODE
-          #define VKD3D_HEAVY_GAME_MODE 1
-          #endif
-          #ifndef VKD3D_VRAM_HEAVY
-          #define VKD3D_VRAM_HEAVY 8192
-          #endif
-          """
-                  m = re.search(r'(#pragma once|#ifndef\s+\w+\s*\n#define\s+\w+)', content)
-                  if m:
-                      pos = content.find('\n', m.end()) + 1
-                      content = content[:pos] + header + content[pos:]
-                  else:
-                      content = header + content
-                  with open(vkd3d_private, "w") as f:
-                      f.write(content)
-                  if "vkd3d_private" not in group_stats:
-                      group_stats["vkd3d_private"] = {"applied": 0, "files": []}
-                  group_stats["vkd3d_private"]["applied"] += 1
-                  group_stats["vkd3d_private"]["files"].append("vkd3d_private.h:1")
-
-          queue_timeline = "libs/vkd3d/queue_timeline.c"
-          if os.path.exists(queue_timeline):
-              with open(queue_timeline, "r") as f:
-                  content = f.read()
-              if "vkd3d_fsync_fence_signaled" not in content:
-                  opt = """
-          /* FSYNC_TIMELINE_OPT */
-          #include <stdbool.h>
-          #include <stdint.h>
-          static inline bool vkd3d_fsync_fence_signaled(uint64_t current, uint64_t target)
-          {
-              return current >= target;
-          }
-          """
-                  content = opt + content
-                  with open(queue_timeline, "w") as f:
-                      f.write(content)
-                  if "fsync_timeline" not in group_stats:
-                      group_stats["fsync_timeline"] = {"applied": 0, "files": []}
-                  group_stats["fsync_timeline"]["applied"] += 1
-                  group_stats["fsync_timeline"]["files"].append("queue_timeline.c:1")
 
           # === PATCH SUMMARY ===
           total = sum(g["applied"] for g in group_stats.values())
@@ -518,66 +412,6 @@ jobs:
           PYSCRIPT
           python3 patch.py
 
-      - name: Apply Winlator/Turnip Optimizations
-        run: |
-          cd src
-          python3 - << 'PYEOF'
-          import re, os, sys
-
-          # ── Winlator Pipeline: Game(DX12) → VKD3D → Vulkan → [FEXCore] → Turnip → Adreno
-          # Every Vulkan API call passes through FEXCore x86→ARM64 translation.
-          # Reducing call count directly reduces translation overhead.
-
-          path = "libs/vkd3d/vkd3d_private.h"
-          if not os.path.exists(path):
-              print("WARN: vkd3d_private.h not found"); sys.exit(0)
-          with open(path, "r") as f:
-              c = f.read()
-
-          if "VKD3D_WINLATOR_OPT" in c:
-              print("Winlator optimizations already present — skip"); sys.exit(0)
-
-          opts = """
-          /* VKD3D_WINLATOR_OPT: Optimizations for Winlator (FEXCore + Turnip + Adreno) */
-
-          #ifndef VKD3D_PREFER_GENERAL_LAYOUT
-          #define VKD3D_PREFER_GENERAL_LAYOUT 1
-          #endif
-
-          #ifndef VKD3D_DESCRIPTOR_POOL_SIZE_MULTIPLIER
-          #define VKD3D_DESCRIPTOR_POOL_SIZE_MULTIPLIER 4
-          #endif
-
-          #ifndef VKD3D_UMA_SKIP_STAGING_THRESHOLD
-          #define VKD3D_UMA_SKIP_STAGING_THRESHOLD (256 * 1024)
-          #endif
-
-          #ifndef VKD3D_TIMELINE_SPIN_COUNT_LOW
-          #define VKD3D_TIMELINE_SPIN_COUNT_LOW 8
-          #endif
-          """
-          c += opts
-          with open(path, "w") as f:
-              f.write(c)
-          print("Winlator/Turnip optimizations: applied")
-
-          for fname in ["libs/vkd3d/resource.c", "libs/vkd3d/command.c"]:
-              if not os.path.exists(fname):
-                  continue
-              with open(fname, "r", encoding="utf-8") as f:
-                  rc = f.read()
-              orig = rc
-              rc = re.sub(
-                  r'(VK_IMAGE_LAYOUT_UNDEFINED\b)(\s*,\s*/\*.*?initial)',
-                  r'VK_IMAGE_LAYOUT_GENERAL\2',
-                  rc, count=0
-              )
-              if rc != orig:
-                  with open(fname, "w", encoding="utf-8") as f:
-                      f.write(rc)
-                  print(f"Layout optimization: {os.path.basename(fname)}")
-          PYEOF
-
       - name: Apply Command Submit ERR Downgrade
         run: |
           cd src
@@ -593,7 +427,6 @@ jobs:
               with open(f, "r", encoding="utf-8") as fh:
                   c = fh.read()
               orig = c
-              # Use string replace (not regex) to avoid backslash escaping issues
               for old_str in [
                   'ERR("Failed to wait for fence',
                   'ERR("Failed to submit',
@@ -608,40 +441,6 @@ jobs:
                   count += 1
                   print(f"ERR→WARN downgrade: {os.path.basename(f)}")
           print(f"Command submit ERR downgrade: {count} file(s) patched")
-          PYEOF
-
-      - name: Apply Barrier Batch Optimization
-        run: |
-          cd src
-          python3 - << 'PYEOF'
-          import re, sys, os
-
-          # Reduce redundant pipeline barriers on tiled GPUs (Adreno).
-          # VKD3D emits per-resource barriers; on TBR hardware each barrier
-          # forces a tile flush. Merging consecutive barriers into a single
-          # call with multiple VkMemoryBarrier2 entries avoids repeated flushes.
-          path = "libs/vkd3d/vkd3d_private.h"
-          if not os.path.exists(path):
-              print("WARN: vkd3d_private.h not found — skip")
-              sys.exit(0)
-          with open(path, "r") as f:
-              c = f.read()
-          if "VKD3D_BARRIER_BATCH_LIMIT" in c:
-              print("Barrier batch already present — skip")
-              sys.exit(0)
-          defines = (
-              "\n/* Barrier batching: merge consecutive barriers to reduce tile flushes on TBR */\n"
-              "#ifndef VKD3D_BARRIER_BATCH_LIMIT\n"
-              "#define VKD3D_BARRIER_BATCH_LIMIT 16\n"
-              "#endif\n"
-              "#ifndef VKD3D_SKIP_REDUNDANT_BARRIERS\n"
-              "#define VKD3D_SKIP_REDUNDANT_BARRIERS 1\n"
-              "#endif\n"
-          )
-          c += defines
-          with open(path, "w") as f:
-              f.write(c)
-          print("Barrier batch optimization: applied")
           PYEOF
 
       - name: Apply State Blend Fix
