@@ -579,7 +579,10 @@ jobs:
           # FATAL D3D ERROR and game crash. Downgrade to WARN + null pipeline so the
           # game can continue with fallback shaders.
           # Affected games: Alan Wake 2 path tracing, Spider-Man 2 RT shaders.
-          pipeline_c = "libs/vkd3d/pipeline.c"
+          # VKD3D v3.0: pipeline code is in state.c, not pipeline.c
+          pipeline_c = "libs/vkd3d/state.c"
+          if not os.path.exists(pipeline_c):
+              pipeline_c = "libs/vkd3d/pipeline.c"
           if os.path.exists(pipeline_c):
               with open(pipeline_c, "r", encoding="utf-8") as f:
                   c = f.read()
