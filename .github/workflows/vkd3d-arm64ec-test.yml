@@ -498,6 +498,97 @@ jobs:
           PYSCRIPT
           python3 patch.py
 
+      - name: Apply Winlator/Turnip Optimizations
+        run: |
+          cd src
+          python3 - << 'PYEOF'
+          import re, os, sys
+
+          # ── Winlator Pipeline: Game(DX12) → VKD3D → Vulkan → [FEXCore] → Turnip → Adreno
+          # Every Vulkan API call passes through FEXCore x86→ARM64 translation.
+          # Reducing call count directly reduces translation overhead.
+
+          path = "libs/vkd3d/vkd3d_private.h"
+          if not os.path.exists(path):
+              print("WARN: vkd3d_private.h not found"); sys.exit(0)
+          with open(path, "r") as f:
+              c = f.read()
+
+          if "VKD3D_WINLATOR_OPT" in c:
+              print("Winlator optimizations already present — skip"); sys.exit(0)
+
+          opts = """
+          /* VKD3D_WINLATOR_OPT: Optimizations for Winlator (FEXCore + Turnip + Adreno) */
+
+          #ifndef VKD3D_PREFER_GENERAL_LAYOUT
+          #define VKD3D_PREFER_GENERAL_LAYOUT 1
+          #endif
+
+          #ifndef VKD3D_DESCRIPTOR_POOL_SIZE_MULTIPLIER
+          #define VKD3D_DESCRIPTOR_POOL_SIZE_MULTIPLIER 4
+          #endif
+
+          #ifndef VKD3D_UMA_SKIP_STAGING_THRESHOLD
+          #define VKD3D_UMA_SKIP_STAGING_THRESHOLD (256 * 1024)
+          #endif
+
+          #ifndef VKD3D_TIMELINE_SPIN_COUNT_LOW
+          #define VKD3D_TIMELINE_SPIN_COUNT_LOW 8
+          #endif
+          """
+          c += opts
+          with open(path, "w") as f:
+              f.write(c)
+          print("Winlator/Turnip optimizations: applied")
+
+          for fname in ["libs/vkd3d/resource.c", "libs/vkd3d/command.c"]:
+              if not os.path.exists(fname):
+                  continue
+              with open(fname, "r", encoding="utf-8") as f:
+                  rc = f.read()
+              orig = rc
+              rc = re.sub(
+                  r'(VK_IMAGE_LAYOUT_UNDEFINED\b)(\s*,\s*/\*.*?initial)',
+                  r'VK_IMAGE_LAYOUT_GENERAL\2',
+                  rc, count=0
+              )
+              if rc != orig:
+                  with open(fname, "w", encoding="utf-8") as f:
+                      f.write(rc)
+                  print(f"Layout optimization: {os.path.basename(fname)}")
+          PYEOF
+
+      - name: Apply Command Submit ERR Downgrade
+        run: |
+          cd src
+          python3 - << 'PYEOF'
+          import re, os
+
+          # Downgrade non-fatal ERR() to WARN() in command submission hot paths.
+          # ERR() flushes stderr synchronously which stalls the submission thread.
+          count = 0
+          for f in ["libs/vkd3d/command.c", "libs/vkd3d/queue.c", "libs/vkd3d/queue_timeline.c"]:
+              if not os.path.exists(f):
+                  continue
+              with open(f, "r", encoding="utf-8") as fh:
+                  c = fh.read()
+              orig = c
+              for pat in [
+                  r'ERR\("Failed to wait for fence',
+                  r'ERR\("Failed to submit',
+                  r'ERR\("Failed to signal',
+                  r'ERR\("Fence wait timeout',
+                  r'ERR\("Queue submit failed',
+              ]:
+                  c = re.sub(pat, pat.replace('ERR', 'WARN', 1), c)
+              if c != orig:
+                  with open(f, "w", encoding="utf-8") as fh:
+                      fh.write(c)
+                  count += 1
+                  print(f"ERR→WARN downgrade: {os.path.basename(f)}")
+          print(f"Command submit ERR downgrade: {count} file(s) patched")
+          PYEOF
+
       - name: Apply Barrier Batch Optimization
         run: |
           cd src
@@ -744,7 +835,7 @@ jobs:
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
-          ARM64EC_FLAGS="-O2 -DNDEBUG -DVKD3D_NO_TRACE_MESSAGES -ffunction-sections -fdata-sections -march=armv8.4-a+dotprod+fp16+rcpc"
+          ARM64EC_FLAGS="-O2 -DNDEBUG -DVKD3D_NO_TRACE_MESSAGES -DVKD3D_SHADER_NO_VALIDATION -ffunction-sections -fdata-sections -march=armv8.4-a+dotprod+fp16+rcpc"
           ARM64EC_C_LINK="-Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt"
           ARM64EC_CPP_LINK="-Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt -lc++ -lc++abi -lunwind"
           X86_FLAGS="-O2 -DNDEBUG -ffunction-sections -fdata-sections"
