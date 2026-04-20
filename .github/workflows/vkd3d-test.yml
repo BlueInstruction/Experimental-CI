@@ -200,6 +200,45 @@ jobs:
             rm -rf spirv-h
           fi
 
+      - name: Inspect VKD3D Source (debug patch targets)
+        run: |
+          cd src
+          echo "=== GPU identity patterns in device.c ==="
+          grep -n "vendor_id\|device_id\|DedicatedVideo\|SharedSystem\|adapter_id" libs/vkd3d/device.c 2>/dev/null | head -30 || true
+          echo ""
+          echo "=== Timeline/fence/esync patterns ==="
+          grep -rn "timeline_semaphore\|win32_fence\|esync\|FENCE_SPIN\|shared_timeline" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -30 || true
+          echo ""
+          echo "=== Render pass patterns ==="
+          grep -rn "use_render_pass\|render_pass_only\|render_passes_only" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== UMA/host_cached patterns ==="
+          grep -rn "force_host_cached\|host_cached\|UMA" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Async compute / GPU boost patterns ==="
+          grep -rn "async_compute\|concurrent_queue\|gpu_va_recycle\|lazy_create_pipeline\|max_compute_queues" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Swapchain latency patterns ==="
+          grep -rn "SWAPCHAIN_LATENCY\|MaximumFrameLatency\|frame_latency\|QUEUE_DEPTH" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Descriptor limits patterns ==="
+          grep -rn "maxDescriptorSet\|maxPerStageDescriptor" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Submission/batch patterns ==="
+          grep -rn "batch_submission\|submission_thread" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Worker/shader thread patterns ==="
+          grep -rn "worker_thread_count\|shader_worker\|SHADER_WORKER" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Pipeline cache patterns ==="
+          grep -rn "PIPELINE_CACHE_SIZE\|use_pipeline_cache" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Fence recycle patterns ==="
+          grep -rn "recycle_fences\|recycle_command" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== All .c and .h files in libs/vkd3d ==="
+          ls libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | sort
+
       - name: Apply Patches
         run: |
           cd src
