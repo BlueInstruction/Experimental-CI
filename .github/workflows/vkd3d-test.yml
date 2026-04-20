@@ -101,7 +101,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             git ninja-build curl jq python3 python3-venv python3-pip \
-            glslang-tools spirv-tools zstd wget unzip patchelf gh
+            glslang-tools spirv-tools zstd wget unzip patchelf gh wine
 
       - name: Pin Meson via venv
         run: |
@@ -625,15 +625,15 @@ jobs:
 
       - name: Create Cross Files
         run: |
-          cat > crossfile-x64.txt << 'EOF'
+          cat > crossfile-x64.txt << EOF
           [binaries]
-          ar = 'llvm-ar'
-          c = 'x86_64-w64-mingw32-clang'
-          cpp = 'x86_64-w64-mingw32-clang++'
-          ld = 'x86_64-w64-mingw32-ld'
-          windres = 'x86_64-w64-mingw32-windres'
-          strip = 'x86_64-w64-mingw32-strip'
-          widl = 'x86_64-w64-mingw32-widl'
+          c = '${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang'
+          cpp = '${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang++'
+          ar = '${TOOLCHAIN_DIR}/bin/llvm-ar'
+          strip = '${TOOLCHAIN_DIR}/bin/llvm-strip'
+          windres = '${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-windres'
+          widl = '${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-widl'
+          exe_wrapper = ['wine']
           [host_machine]
           system = 'windows'
           cpu_family = 'x86_64'
@@ -641,15 +641,15 @@ jobs:
           endian = 'little'
           EOF
 
-          cat > crossfile-x86.txt << 'EOF'
+          cat > crossfile-x86.txt << EOF
           [binaries]
-          ar = 'llvm-ar'
-          c = 'i686-w64-mingw32-clang'
-          cpp = 'i686-w64-mingw32-clang++'
-          ld = 'i686-w64-mingw32-ld'
-          windres = 'i686-w64-mingw32-windres'
-          strip = 'i686-w64-mingw32-strip'
-          widl = 'i686-w64-mingw32-widl'
+          c = '${TOOLCHAIN_DIR}/bin/i686-w64-mingw32-clang'
+          cpp = '${TOOLCHAIN_DIR}/bin/i686-w64-mingw32-clang++'
+          ar = '${TOOLCHAIN_DIR}/bin/llvm-ar'
+          strip = '${TOOLCHAIN_DIR}/bin/llvm-strip'
+          windres = '${TOOLCHAIN_DIR}/bin/i686-w64-mingw32-windres'
+          widl = '${TOOLCHAIN_DIR}/bin/i686-w64-mingw32-widl'
+          exe_wrapper = ['wine']
           [host_machine]
           system = 'windows'
           cpu_family = 'x86'
@@ -668,7 +668,7 @@ jobs:
             -Db_lto=true \
             -Db_ndebug=true \
             -Dstrip=true
-          ninja -C build-x64 -j$(nproc) 2>&1 | tee build-x64.log
+          ninja -C build-x64 -j2 2>&1 | tee build-x64.log
           [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-x64.log; exit 1; }
 
           meson setup build-x86 \
@@ -677,7 +677,7 @@ jobs:
             -Db_lto=true \
             -Db_ndebug=true \
             -Dstrip=true
-          ninja -C build-x86 -j$(nproc) 2>&1 | tee build-x86.log
+          ninja -C build-x86 -j2 2>&1 | tee build-x86.log
           [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-x86.log; exit 1; }
 
       - name: Verify Build
