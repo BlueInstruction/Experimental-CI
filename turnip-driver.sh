@@ -1345,7 +1345,6 @@ configure_build() {
         --cross-file "${WORKDIR}/cross-aarch64.txt"     \
         -Dbuildtype="$buildtype"                         \
         -Db_ndebug=true                                  \
-        -Db_lto=true                                     \
         -Dplatforms=android                              \
         -Dplatform-sdk-version="$API_LEVEL"              \
         -Dandroid-stub=true                              \
@@ -1468,7 +1467,7 @@ print_summary() {
     printf "  ║  %-20s : %-35s ║\n" "Build Variant" "$BUILD_VARIANT"
     printf "  ║  %-20s : %-35s ║\n" "Source"        "$MESA_SOURCE"
     printf "  ║  %-20s : %-35s ║\n" "API Level"     "$API_LEVEL"
-    printf "  ║  %-20s : %-35s ║\n" "LTO"           "true"
+    printf "  ║  %-20s : %-35s ║\n" "LTO"           "disabled (Mesa unsupported)"
     printf "  ║  %-20s : %-35s ║\n" "March"         "armv8.2-a+fp16+rcpc+dotprod+i8mm"
     echo "  ╠═══════════════════════════════════════════════════════════╣"
     printf "  ║  %-20s : %-35s ║\n" "Deck Emu"      "$ENABLE_DECK_EMU"
