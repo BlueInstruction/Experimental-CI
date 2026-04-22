@@ -307,42 +307,8 @@ jobs:
           path = "libs/vkd3d/device.c"
           with open(path, "r", encoding="utf-8") as f:
               c = f.read()
-          if "vkd3d_adreno_fl12_ok" in c:
+          if "Adreno FL 12.0 override" in c:
               print("Adreno FL 12.0 patch: already applied"); exit(0)
-          helper = (
-              '\n/* Adreno FL 12.0 override — BlueInstruction patch */\n'
-              '#define QUALCOMM_VENDOR_ID 0x5143u\n'
-              'static inline bool vkd3d_is_adreno(const VkPhysicalDeviceProperties *props)\n'
-              '{ return props->vendorID == QUALCOMM_VENDOR_ID; }\n'
-              'static inline bool vkd3d_adreno_fl12_ok(const struct d3d12_device *device)\n'
-              '{\n'
-              '    const struct vkd3d_vulkan_info *vk = &device->vk_info;\n'
-              '    const VkPhysicalDeviceFeatures *f = &device->device_info.features2.features;\n'
-              '    return vk->KHR_buffer_device_address && vk->EXT_descriptor_indexing && f->shaderInt64;\n'
-              '}\n'
-          )
-          # Dynamic anchor: find any function returning D3D_FEATURE_LEVEL
-          for anchor_pat in [
-              r'^(static\s+)?D3D_FEATURE_LEVEL\s+\w*determine_feature_level\w*\s*\(',
-              r'^(static\s+)?D3D_FEATURE_LEVEL\s+\w+\s*\([^)]*device\b',
-              r'D3D_FEATURE_LEVEL\s+\w*feature_level\w*\s*\(',
-          ]:
-              anchor_re = re.search(anchor_pat, c, re.MULTILINE)
-              if anchor_re:
-                  break
-          if anchor_re:
-              line_start = c.rfind('\n', 0, anchor_re.start()) + 1
-              c = c[:line_start] + helper + '\n' + c[line_start:]
-              print(f"Helper inserted before: {anchor_re.group()[:60]}")
-          else:
-              inc_end = c.rfind('#include')
-              if inc_end >= 0:
-                  inc_end = c.find('\n', inc_end) + 1
-              else:
-                  inc_end = 0
-              c = c[:inc_end] + helper + '\n' + c[inc_end:]
-              print("WARN: No feature_level function found, inserted helper after includes")
-
           # Auto-detect the variable name: "feature_level" or "caps->max_feature_level" etc.
           fl_assign = re.search(r'(\w+(?:->\w+)*(?:\.\w+)*)\s*=\s*D3D_FEATURE_LEVEL_12_0\s*;', c)
           if fl_assign:
@@ -352,17 +318,19 @@ jobs:
               fl_var = "feature_level"
               print(f"WARN: Could not detect FL variable, assuming: {fl_var}")
 
-          # Strategy 1: find the FL 12.0 assignment and add Adreno override after it
+          # Find the FL 12.0 assignment and add Adreno override after it (inline, no helper functions)
           fl_line = re.search(
               r'(' + re.escape(fl_var) + r'\s*=\s*D3D_FEATURE_LEVEL_12_0\s*;)',
               c)
           if fl_line:
               idx = fl_line.end()
               adreno_insert = (
-                  '\n\n    /* Adreno FL 12.0 override — BlueInstruction */\n'
+                  '\n\n    /* Adreno FL 12.0 override — BlueInstruction patch */\n'
                   '    if (' + fl_var + ' < D3D_FEATURE_LEVEL_12_0 &&\n'
-                  '        vkd3d_is_adreno(&device->device_info.properties2.properties) &&\n'
-                  '        vkd3d_adreno_fl12_ok(device))\n'
+                  '        device->device_info.properties2.properties.vendorID == 0x5143u &&\n'
+                  '        device->vk_info.KHR_buffer_device_address &&\n'
+                  '        device->vk_info.EXT_descriptor_indexing &&\n'
+                  '        device->device_info.features2.features.shaderInt64)\n'
                   '    {\n'
                   '        ' + fl_var + ' = D3D_FEATURE_LEVEL_12_0;\n'
                   '        WARN("Adreno: elevating to FL 12.0 (sparse binding emulated).\\n");\n'
