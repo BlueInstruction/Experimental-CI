@@ -330,20 +330,31 @@ jobs:
               '    return vk->KHR_buffer_device_address && vk->EXT_descriptor_indexing && f->shaderInt64;\n'
               '}\n'
           )
-          anchor = "static D3D_FEATURE_LEVEL vkd3d_determine_feature_level("
-          if anchor not in c:
-              # Try alternate anchor
-              anchor = "D3D_FEATURE_LEVEL vkd3d_determine_feature_level("
-          if anchor not in c:
-              print("WARN: vkd3d_determine_feature_level not found — skip"); exit(0)
+          # Dynamic anchor: find any function returning D3D_FEATURE_LEVEL
+          for anchor_pat in [
+              r'^(static\s+)?D3D_FEATURE_LEVEL\s+\w*determine_feature_level\w*\s*\(',
+              r'^(static\s+)?D3D_FEATURE_LEVEL\s+\w+\s*\([^)]*device\b',
+              r'D3D_FEATURE_LEVEL\s+\w*feature_level\w*\s*\(',
+          ]:
+              anchor_re = re.search(anchor_pat, c, re.MULTILINE)
+              if anchor_re:
+                  break
+          if anchor_re:
+              line_start = c.rfind('\n', 0, anchor_re.start()) + 1
+              c = c[:line_start] + helper + '\n' + c[line_start:]
+              print(f"Helper inserted before: {anchor_re.group()[:60]}")
+          else:
+              inc_end = c.rfind('#include')
+              if inc_end >= 0:
+                  inc_end = c.find('\n', inc_end) + 1
+              else:
+                  inc_end = 0
+              c = c[:inc_end] + helper + '\n' + c[inc_end:]
+              print("WARN: No feature_level function found, inserted helper after includes")
 
-          pos = c.find(anchor)
-          line_start = c.rfind('\n', 0, pos) + 1
-          c = c[:line_start] + helper + '\n' + c[line_start:]
-
-          # Replace sparseBinding FL 12.0 check with Adreno-aware version
+          # Strategy 1: sparseBinding + BDA -> FL 12.0 (flexible regex)
           old_check = re.search(
-              r'if\s*\(\s*device->device_info\.features2\.features\.sparseBinding\s*&&\s*\n?\s*vk_info->KHR_buffer_device_address\s*\)\s*\n?\s*feature_level\s*=\s*D3D_FEATURE_LEVEL_12_0\s*;',
+              r'if\s*\([^)]*sparseBinding[^)]*KHR_buffer_device_address[^)]*\)\s*\n?\s*feature_level\s*=\s*D3D_FEATURE_LEVEL_12_0\s*;',
               c, re.DOTALL
           )
           if old_check:
@@ -389,8 +400,21 @@ jobs:
                       f.write(c)
                   print("Adreno FL 12.0 patch: applied (fallback path)")
               else:
-                  print("ERROR: Adreno FL 12.0 patch completely failed — neither pattern matched in device.c")
-                  exit(1)
+                  # Strategy 3: insert before "return feature_level;"
+                  fl_ret = re.search(r'return\s+feature_level\s*;', c)
+                  if fl_ret:
+                      adreno_block = (
+                          '\n    /* Adreno FL 12.0 override */\n'
+                          '    if (feature_level < D3D_FEATURE_LEVEL_12_0 && vkd3d_is_adreno(&device->device_info.properties2.properties) && vkd3d_adreno_fl12_ok(device))\n'
+                          '    { feature_level = D3D_FEATURE_LEVEL_12_0; WARN("Adreno: elevating to FL 12.0.\\n"); }\n'
+                      )
+                      c = c[:fl_ret.start()] + adreno_block + c[fl_ret.start():]
+                      with open(path, "w", encoding="utf-8") as f:
+                          f.write(c)
+                      print("Adreno FL 12.0 patch: applied (before return)")
+                  else:
+                      print("ERROR: Adreno FL 12.0 patch failed — no suitable insertion point")
+                      exit(1)
           PYEOF
 
       - name: Apply Adreno PSO Fallback
@@ -412,36 +436,35 @@ jobs:
           if "adreno_fallback" in c:
               print("Adreno PSO fallback: already applied"); exit(0)
 
-          # Find CreateGraphicsPipelineState or create_graphics_pipeline
-          for anchor in [
-              "d3d12_device_CreateGraphicsPipelineState",
-              "d3d12_pipeline_state_create_graphics",
+          # Dynamic: find any graphics pipeline creation call
+          pattern = None
+          for pat in [
+              r'(hr\s*=\s*\w*create\w*graphics\w*pipeline\w*\s*\([^)]+\)\s*;)',
+              r'(hr\s*=\s*\w*pipeline_state_create\w*\s*\([^)]+\)\s*;)',
+              r'(hr\s*=\s*\w*graphics_pipeline\w*\s*\([^)]+\)\s*;)',
           ]:
-              if anchor in c:
-                  # Add fallback after the first E_INVALIDARG or FAILED(hr) return
-                  pattern = re.search(
-                      r'(hr\s*=\s*d3d12_pipeline_state_create_graphics\s*\([^)]+\)\s*;)',
-                      c
-                  )
-                  if pattern:
-                      insert_after = pattern.end()
-                      fallback = (
-                          '\n\n'
-                          '    /* adreno_fallback: retry PSO creation with reduced descriptor on Adreno */\n'
-                          '    if (hr == E_INVALIDARG &&\n'
-                          '        device->device_info.properties2.properties.vendorID == 0x5143u)\n'
-                          '    {\n'
-                          '        WARN("Adreno: PSO creation failed E_INVALIDARG, attempting fallback.\\n");\n'
-                          '        /* Future: implement d3d12_device_create_graphics_pso_adreno_fallback() */\n'
-                          '    }'
-                      )
-                      c = c[:insert_after] + fallback + c[insert_after:]
-                      with open(path, "w", encoding="utf-8") as f:
-                          f.write(c)
-                      print(f"Adreno PSO fallback: applied in {os.path.basename(path)}")
-                      exit(0)
+              pattern = re.search(pat, c, re.IGNORECASE)
+              if pattern:
+                  break
+          if pattern:
+              insert_after = pattern.end()
+              fallback = (
+                  '\n\n'
+                  '    /* adreno_fallback: retry PSO creation with reduced descriptor on Adreno */\n'
+                  '    if (hr == E_INVALIDARG &&\n'
+                  '        device->device_info.properties2.properties.vendorID == 0x5143u)\n'
+                  '    {\n'
+                  '        WARN("Adreno: PSO creation failed E_INVALIDARG, attempting fallback.\\n");\n'
+                  '        /* Future: implement d3d12_device_create_graphics_pso_adreno_fallback() */\n'
+                  '    }'
+              )
+              c = c[:insert_after] + fallback + c[insert_after:]
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(c)
+              print(f"Adreno PSO fallback: applied in {os.path.basename(path)}")
+              exit(0)
 
-          print("WARN: PSO creation function not found — skip")
+          print("ERROR: PSO creation function not found in state.c or device.c"); exit(1)
           PYEOF
 
       - name: Apply Patches
