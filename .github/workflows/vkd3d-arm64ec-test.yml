@@ -299,48 +299,51 @@ jobs:
               print("VRS Tier 2 patch: already applied or pattern not found")
           PYEOF
 
-      - name: Apply Adreno FL 12.0 Override
+      - name: Apply Adreno FL 12.1 Override
         run: |
           cd src
           python3 - << 'PYEOF'
           import re, os
+
           path = "libs/vkd3d/device.c"
           with open(path, "r", encoding="utf-8") as f:
               c = f.read()
-          if "Adreno FL 12.0 override" in c:
-              print("Adreno FL 12.0 patch: already applied"); exit(0)
-          # Auto-detect the variable name: "feature_level" or "caps->max_feature_level" etc.
-          fl_assign = re.search(r'(\w+(?:->\w+)*(?:\.\w+)*)\s*=\s*D3D_FEATURE_LEVEL_12_0\s*;', c)
+          if "Adreno FL 12.1 override" in c:
+              print("Adreno FL 12.1 patch: already applied"); exit(0)
+
+          # Auto-detect the variable name
+          fl_assign = re.search(r'(\w+(?:->\w+)*(?:\.\w+)*)\s*=\s*D3D_FEATURE_LEVEL_12_1\s*;', c)
           if fl_assign:
               fl_var = fl_assign.group(1)
-              print(f"Detected FL variable: {fl_var}")
+              print(f"Detected FL 12.1 variable: {fl_var}")
           else:
-              fl_var = "feature_level"
-              print(f"WARN: Could not detect FL variable, assuming: {fl_var}")
+              fl_var = "caps->max_feature_level"
+              print(f"WARN: Could not detect FL 12.1 variable, assuming: {fl_var}")
 
-          # Find the FL 12.0 assignment and add Adreno override after it (inline, no helper functions)
+          # Find the FL 12.1 assignment and add Adreno override after it
           fl_line = re.search(
-              r'(' + re.escape(fl_var) + r'\s*=\s*D3D_FEATURE_LEVEL_12_0\s*;)',
+              r'(' + re.escape(fl_var) + r'\s*=\s*D3D_FEATURE_LEVEL_12_1\s*;)',
               c)
           if fl_line:
               idx = fl_line.end()
               adreno_insert = (
-                  '\n\n    /* Adreno FL 12.0 override — BlueInstruction patch */\n'
-                  '    /* BDA + descriptor_indexing are Vulkan 1.3 core (always available) */\n'
-                  '    if (' + fl_var + ' < D3D_FEATURE_LEVEL_12_0 &&\n'
+                  '\n\n    /* Adreno FL 12.1 override — BlueInstruction patch */\n'
+                  '    /* Adreno 7xx supports ROVs via fragment_shader_interlock */\n'
+                  '    if (' + fl_var + ' < D3D_FEATURE_LEVEL_12_1 &&\n'
                   '        device->device_info.properties2.properties.vendorID == 0x5143u &&\n'
-                  '        device->device_info.features2.features.shaderInt64)\n'
+                  '        device->device_info.features2.features.shaderInt64 &&\n'
+                  '        caps->options.ROVsSupported)\n'
                   '    {\n'
-                  '        ' + fl_var + ' = D3D_FEATURE_LEVEL_12_0;\n'
-                  '        WARN("Adreno: elevating to FL 12.0 (sparse binding emulated).\\n");\n'
+                  '        ' + fl_var + ' = D3D_FEATURE_LEVEL_12_1;\n'
+                  '        WARN("Adreno: elevating to FL 12.1 (ROVs confirmed).\\n");\n'
                   '    }'
               )
               c = c[:idx] + adreno_insert + c[idx:]
               with open(path, "w", encoding="utf-8") as f:
                   f.write(c)
-              print("Adreno FL 12.0 patch: applied (after FL 12.0 assignment)")
+              print("Adreno FL 12.1 patch: applied (after FL 12.1 assignment)")
           else:
-              print("ERROR: Adreno FL 12.0 patch failed — no D3D_FEATURE_LEVEL_12_0 assignment found")
+              print("ERROR: Adreno FL 12.1 patch failed — no D3D_FEATURE_LEVEL_12_1 assignment found")
               exit(1)
           PYEOF
 
