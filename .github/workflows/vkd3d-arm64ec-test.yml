@@ -272,10 +272,10 @@ jobs:
           echo "=== Patch anchor: VRS tier patterns ==="
           grep -n "VARIABLE_SHADING_RATE_TIER\|SHADING_RATE_TIER" libs/vkd3d/device.c 2>/dev/null | head -10 || true
 
-      # ── PATCHES DISABLED ──────────────────────────────────────────────
-      # Most patches disabled — caused UE5 compatibility issues (Samson).
-      # Kept for future re-enablement. Remove 'if: false' to re-enable.
-      # Only VRS Tier 2 patch is active (commit 8850039, needed for Crimson Desert).
+      # ── ADRENO PATCHES ───────────────────────────────────────────────
+      # Patches for Adreno 7xx (Qualcomm 0x5143) on Turnip driver.
+      # VRS Tier 2 + FL 12.1 + TBR + Blend Fix + Transfer Queue + Heavy Fixes
+      # PSO Fallback removed (confirmed crash cause in Ghost of Tsushima).
       # ────────────────────────────────────────────────────────────────────
 
       - name: Apply VRS Tier 2 Patch
@@ -373,7 +373,6 @@ jobs:
                   c, re.DOTALL)
 
           if pattern:
-              # Find the end of the if-block (next return hr;) after the match
               after = c[pattern.end():]
               ret_match = re.search(r'return\s+hr\s*;', after)
               if ret_match:
@@ -608,7 +607,6 @@ jobs:
           PYEOF
 
       - name: Apply Transfer Queue Fix
-        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
@@ -651,7 +649,6 @@ jobs:
           PYEOF
 
       - name: Apply Heavy Game Resource Fixes
-        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
