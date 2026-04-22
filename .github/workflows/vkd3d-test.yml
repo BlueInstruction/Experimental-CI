@@ -353,62 +353,44 @@ jobs:
           python3 - << 'PYEOF'
           import re, os
 
-          # PATCH 3/3: Adreno PSO creation fallback path.
-          # When CreateGraphicsPipelineState fails with E_INVALIDARG on Adreno,
-          # retry with stripped conservative raster, mesh/amplification shaders,
-          # and substituted R11G11B10 -> R16G16B16A16 RTV formats.
-          path = "libs/vkd3d/state.c"
-          if not os.path.exists(path):
-              path = "libs/vkd3d/device.c"
+          # PSO fallback goes in device.c where d3d12_pipeline_state_create is CALLED
+          # (device.c:4796), not where it's DEFINED (state.c:5821)
+          path = "libs/vkd3d/device.c"
           with open(path, "r", encoding="utf-8") as f:
               c = f.read()
-
           if "adreno_fallback" in c:
               print("Adreno PSO fallback: already applied"); exit(0)
 
-          # Dynamic: find any pipeline creation call
-          pattern = None
-          for pat in [
-              r'(hr\s*=\s*\w*create\w*graphics\w*pipeline\w*\s*\([^)]+\)\s*;)',
-              r'(hr\s*=\s*\w*pipeline_state_create\w*\s*\([^)]+\)\s*;)',
-              r'(hr\s*=\s*d3d12_pipeline_state_create\s*\([^)]+\)\s*;)',
-              r'(FAILED\s*\(\s*hr\s*=\s*\w*pipeline\w*create\w*\([^)]+\)\s*\))',
-              r'(\w*pipeline\w*create\w*variant\w*\s*\([^)]+\)\s*;)',
-              r'(hr\s*=\s*\w*pipeline\w*\([^)]+\)\s*;)',
-          ]:
-              pattern = re.search(pat, c, re.IGNORECASE)
-              if pattern:
-                  break
+          # Find: if (FAILED(hr = d3d12_pipeline_state_create(...)))
+          #   or: hr = d3d12_pipeline_state_create(...)
+          pattern = re.search(
+              r'((?:if\s*\(\s*)?FAILED\s*\(\s*hr\s*=\s*d3d12_pipeline_state_create\s*\([^)]*\)[^)]*\))',
+              c, re.DOTALL)
           if not pattern:
-              # Last resort: find HRESULT function definition for pipeline_state_create
-              fn_def = re.search(r'(HRESULT\s+d3d12_pipeline_state_create\s*\([^)]+\))', c)
-              if fn_def:
-                  # Find the first "return hr;" in this function
-                  body_start = c.find('{', fn_def.end())
-                  if body_start > 0:
-                      ret_hr = re.search(r'(return\s+hr\s*;)', c[body_start:])
-                      if ret_hr:
-                          pattern = type('M', (), {'end': lambda s: body_start + ret_hr.start()})()
-                          print("PSO: using return hr inside d3d12_pipeline_state_create")
+              pattern = re.search(
+                  r'(hr\s*=\s*d3d12_pipeline_state_create\s*\([^;]+;)',
+                  c, re.DOTALL)
+
           if pattern:
-              insert_after = pattern.end()
+              # Find the end of the if-block (next return hr;) after the match
+              after = c[pattern.end():]
+              ret_match = re.search(r'return\s+hr\s*;', after)
+              if ret_match:
+                  insert_pos = pattern.end() + ret_match.start()
+              else:
+                  insert_pos = pattern.end()
+
               fallback = (
-                  '\n\n'
-                  '    /* adreno_fallback: retry PSO creation with reduced descriptor on Adreno */\n'
-                  '    if (hr == E_INVALIDARG &&\n'
-                  '        device->device_info.properties2.properties.vendorID == 0x5143u)\n'
-                  '    {\n'
-                  '        WARN("Adreno: PSO creation failed E_INVALIDARG, attempting fallback.\\n");\n'
-                  '        /* Future: implement d3d12_device_create_graphics_pso_adreno_fallback() */\n'
-                  '    }'
+                  '\n\n    /* adreno_fallback: log Adreno PSO creation failures */\n'
+                  '    if (FAILED(hr) && device->device_info.properties2.properties.vendorID == 0x5143u)\n'
+                  '        WARN("Adreno: PSO creation failed (hr %#x). Game may have rendering issues.\\n", hr);\n'
               )
-              c = c[:insert_after] + fallback + c[insert_after:]
+              c = c[:insert_pos] + fallback + c[insert_pos:]
               with open(path, "w", encoding="utf-8") as f:
                   f.write(c)
-              print(f"Adreno PSO fallback: applied in {os.path.basename(path)}")
-              exit(0)
-
-          print("ERROR: PSO creation function not found in state.c or device.c"); exit(1)
+              print(f"Adreno PSO fallback: applied at char {insert_pos} in device.c")
+          else:
+              print("ERROR: d3d12_pipeline_state_create call not found in device.c"); exit(1)
           PYEOF
 
       - name: Apply Patches
