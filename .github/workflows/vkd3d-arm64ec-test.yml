@@ -326,10 +326,9 @@ jobs:
               idx = fl_line.end()
               adreno_insert = (
                   '\n\n    /* Adreno FL 12.0 override — BlueInstruction patch */\n'
+                  '    /* BDA + descriptor_indexing are Vulkan 1.3 core (always available) */\n'
                   '    if (' + fl_var + ' < D3D_FEATURE_LEVEL_12_0 &&\n'
                   '        device->device_info.properties2.properties.vendorID == 0x5143u &&\n'
-                  '        device->vk_info.KHR_buffer_device_address &&\n'
-                  '        device->vk_info.EXT_descriptor_indexing &&\n'
                   '        device->device_info.features2.features.shaderInt64)\n'
                   '    {\n'
                   '        ' + fl_var + ' = D3D_FEATURE_LEVEL_12_0;\n'
