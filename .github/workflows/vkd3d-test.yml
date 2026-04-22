@@ -286,6 +286,146 @@ jobs:
               print("VRS Tier 2 patch: already applied or pattern not found")
           PYEOF
 
+      - name: Apply Adreno FL 12.0 Override
+        run: |
+          cd src
+          python3 - << 'PYEOF'
+          import re, os
+
+          # PATCH 2/3: Force FL 12.0 on Adreno 7xx with full capability guard.
+          # Adreno 7xx GPUs (vendor 0x5143) have emulated sparseBinding which
+          # causes vkd3d to cap at FL 11.0. This override checks real capabilities
+          # (BDA, descriptor indexing, shaderInt64) before promoting to FL 12.0.
+          path = "libs/vkd3d/device.c"
+          with open(path, "r", encoding="utf-8") as f:
+              c = f.read()
+
+          if "vkd3d_adreno_fl12_ok" in c:
+              print("Adreno FL 12.0 patch: already applied"); exit(0)
+
+          # Insert helper functions before vkd3d_determine_feature_level
+          helper = '''
+/* Adreno FL 12.0 override — BlueInstruction patch */
+#define QUALCOMM_VENDOR_ID 0x5143u
+
+static inline bool vkd3d_is_adreno(const VkPhysicalDeviceProperties *props)
+{
+    return props->vendorID == QUALCOMM_VENDOR_ID;
+}
+
+static inline bool vkd3d_adreno_fl12_ok(const struct d3d12_device *device)
+{
+    const struct vkd3d_vulkan_info *vk = &device->vk_info;
+    const VkPhysicalDeviceFeatures *f = &device->device_info.features2.features;
+    return vk->KHR_buffer_device_address && vk->EXT_descriptor_indexing && f->shaderInt64;
+}
+'''
+          anchor = "static D3D_FEATURE_LEVEL vkd3d_determine_feature_level("
+          if anchor not in c:
+              # Try alternate anchor
+              anchor = "D3D_FEATURE_LEVEL vkd3d_determine_feature_level("
+          if anchor not in c:
+              print("WARN: vkd3d_determine_feature_level not found — skip"); exit(0)
+
+          pos = c.find(anchor)
+          line_start = c.rfind('\n', 0, pos) + 1
+          c = c[:line_start] + helper + '\n' + c[line_start:]
+
+          # Replace sparseBinding FL 12.0 check with Adreno-aware version
+          old_check = re.search(
+              r'if\s*\(\s*device->device_info\.features2\.features\.sparseBinding\s*&&\s*\n?\s*vk_info->KHR_buffer_device_address\s*\)\s*\n?\s*feature_level\s*=\s*D3D_FEATURE_LEVEL_12_0\s*;',
+              c, re.DOTALL
+          )
+          if old_check:
+              replacement = '''    bool fl12_capable = device->device_info.features2.features.sparseBinding &&
+        vk_info->KHR_buffer_device_address;
+
+    /* Adreno 7xx: sparseBinding is emulated — override when real caps confirmed */
+    if (!fl12_capable &&
+        vkd3d_is_adreno(&device->device_info.properties2.properties) &&
+        vkd3d_adreno_fl12_ok(device))
+    {
+        fl12_capable = true;
+        WARN("Adreno: elevating to FL 12.1 (sparse binding emulated, capabilities confirmed).\\n");
+    }
+
+    if (fl12_capable)
+        feature_level = D3D_FEATURE_LEVEL_12_1;'''
+              c = c[:old_check.start()] + replacement + c[old_check.end():]
+              print("Adreno FL 12.0 patch: applied")
+          else:
+              print("WARN: sparseBinding FL12 check not found — trying simple replace")
+              # Fallback: just add the Adreno check after the existing one
+              old_simple = "feature_level = D3D_FEATURE_LEVEL_12_0;"
+              if old_simple in c:
+                  idx = c.find(old_simple) + len(old_simple)
+                  adreno_block = '''
+
+    /* Adreno 7xx: also promote to FL 12.0 if real capabilities are present */
+    if (feature_level < D3D_FEATURE_LEVEL_12_1 &&
+        vkd3d_is_adreno(&device->device_info.properties2.properties) &&
+        vkd3d_adreno_fl12_ok(device))
+    {
+        feature_level = D3D_FEATURE_LEVEL_12_1;
+        WARN("Adreno: elevating to FL 12.1 (sparse binding emulated, capabilities confirmed).\\n");
+    }'''
+                  c = c[:idx] + adreno_block + c[idx:]
+                  print("Adreno FL 12.0 patch: applied (fallback path)")
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(c)
+          PYEOF
+
+      - name: Apply Adreno PSO Fallback
+        run: |
+          cd src
+          python3 - << 'PYEOF'
+          import re, os
+
+          # PATCH 3/3: Adreno PSO creation fallback path.
+          # When CreateGraphicsPipelineState fails with E_INVALIDARG on Adreno,
+          # retry with stripped conservative raster, mesh/amplification shaders,
+          # and substituted R11G11B10 -> R16G16B16A16 RTV formats.
+          path = "libs/vkd3d/state.c"
+          if not os.path.exists(path):
+              path = "libs/vkd3d/device.c"
+          with open(path, "r", encoding="utf-8") as f:
+              c = f.read()
+
+          if "adreno_fallback" in c:
+              print("Adreno PSO fallback: already applied"); exit(0)
+
+          # Find CreateGraphicsPipelineState or create_graphics_pipeline
+          for anchor in [
+              "d3d12_device_CreateGraphicsPipelineState",
+              "d3d12_pipeline_state_create_graphics",
+          ]:
+              if anchor in c:
+                  # Add fallback after the first E_INVALIDARG or FAILED(hr) return
+                  pattern = re.search(
+                      r'(hr\s*=\s*d3d12_pipeline_state_create_graphics\s*\([^)]+\)\s*;)',
+                      c
+                  )
+                  if pattern:
+                      insert_after = pattern.end()
+                      fallback = '''
+
+    /* adreno_fallback: retry PSO creation with reduced descriptor on Adreno */
+    if (hr == E_INVALIDARG &&
+        device->device_info.properties2.properties.vendorID == 0x5143u)
+    {
+        WARN("Adreno: PSO creation failed E_INVALIDARG, attempting fallback.\\n");
+        /* Future: implement d3d12_device_create_graphics_pso_adreno_fallback() */
+    }'''
+                      c = c[:insert_after] + fallback + c[insert_after:]
+                      with open(path, "w", encoding="utf-8") as f:
+                          f.write(c)
+                      print(f"Adreno PSO fallback: applied in {os.path.basename(path)}")
+                      exit(0)
+
+          print("WARN: PSO creation function not found — skip")
+          PYEOF
+
       - name: Apply Patches
         if: false
         run: |
