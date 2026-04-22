@@ -393,8 +393,7 @@ jobs:
               print("ERROR: d3d12_pipeline_state_create call not found in device.c"); exit(1)
           PYEOF
 
-      - name: Apply Patches
-        if: false
+      - name: Apply Adreno Tiled GPU + Rendering Patches
         run: |
           cd src
           cat > patch.py << 'PYSCRIPT'
@@ -547,7 +546,6 @@ jobs:
           python3 patch.py
 
       - name: Apply Command Submit ERR Downgrade
-        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
@@ -579,7 +577,6 @@ jobs:
           PYEOF
 
       - name: Apply State Blend Fix
-        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
