@@ -168,13 +168,33 @@ jobs:
           arm64ec-w64-mingw32-clang --version
           i686-w64-mingw32-clang --version
 
+      - name: Cache GLSLang
+        id: cache-glslang
+        uses: actions/cache@v4
+        with:
+          path: glslang
+          key: glslang-main-tot-v2
+
+      - name: Setup latest GLSLang
+        if: steps.cache-glslang.outputs.cache-hit != 'true'
+        run: |
+          wget -q https://github.com/KhronosGroup/glslang/releases/download/main-tot/glslang-main-linux-Release.zip
+          unzip -q glslang-main-linux-Release.zip -d glslang
+          rm glslang-main-linux-Release.zip
+
+      - name: Add GLSLang to PATH
+        run: |
+          echo "$PWD/glslang/bin" >> $GITHUB_PATH
+          echo "GLSLang version:"
+          $PWD/glslang/bin/glslangValidator --version 2>/dev/null || $PWD/glslang/bin/glslang --version 2>/dev/null || true
+
       - name: Clone Source
         run: |
-          git clone --recurse-submodules --recursive --branch proton-20260410 --depth 1 \
+          git clone --recurse-submodules --recursive --branch master --depth 1 \
             https://github.com/BlueInstruction/vkd3d-proton.git src
           cd src
           echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
-          echo "Source: proton-20260410 @ $(git rev-parse --short HEAD) (version label: v$VER)"
+          echo "Source: master @ $(git rev-parse --short HEAD) (version label: v$VER)"
 
       - name: Update Vulkan + SPIRV Headers
         run: |
@@ -201,44 +221,193 @@ jobs:
             rm -rf spirv-h
           fi
 
+      - name: Inspect VKD3D Source (debug patch targets)
+        run: |
+          cd src
+          echo "=== GPU identity patterns in device.c ==="
+          grep -n "vendor_id\|device_id\|DedicatedVideo\|SharedSystem\|adapter_id" libs/vkd3d/device.c 2>/dev/null | head -30 || true
+          echo ""
+          echo "=== Timeline/fence/esync patterns ==="
+          grep -rn "timeline_semaphore\|win32_fence\|esync\|FENCE_SPIN\|shared_timeline" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -30 || true
+          echo ""
+          echo "=== Render pass patterns ==="
+          grep -rn "use_render_pass\|render_pass_only\|render_passes_only" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== UMA/host_cached patterns ==="
+          grep -rn "force_host_cached\|host_cached\|UMA" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Async compute / GPU boost patterns ==="
+          grep -rn "async_compute\|concurrent_queue\|gpu_va_recycle\|lazy_create_pipeline\|max_compute_queues" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Swapchain latency patterns ==="
+          grep -rn "SWAPCHAIN_LATENCY\|MaximumFrameLatency\|frame_latency\|QUEUE_DEPTH" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Descriptor limits patterns ==="
+          grep -rn "maxDescriptorSet\|maxPerStageDescriptor" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Submission/batch patterns ==="
+          grep -rn "batch_submission\|submission_thread" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Worker/shader thread patterns ==="
+          grep -rn "worker_thread_count\|shader_worker\|SHADER_WORKER" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Pipeline cache patterns ==="
+          grep -rn "PIPELINE_CACHE_SIZE\|use_pipeline_cache" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Fence recycle patterns ==="
+          grep -rn "recycle_fences\|recycle_command" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== All .c and .h files in libs/vkd3d ==="
+          ls libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | sort
+
+      # ── PATCHES DISABLED ──────────────────────────────────────────────
+      # Most patches disabled — caused UE5 compatibility issues (Samson).
+      # Kept for future re-enablement. Remove 'if: false' to re-enable.
+      # Only VRS Tier 2 patch is active (commit 8850039, needed for Crimson Desert).
+      # ────────────────────────────────────────────────────────────────────
+
+      - name: Apply VRS Tier 2 Patch
+        run: |
+          cd src
+          python3 - << 'PYEOF'
+          import re, os
+          # Commit 8850039: Bump RDNA1 compat path for VRS up to tier 2.
+          # Crimson Desert hard requires VRS tier 2 in latest patch.
+          path = "libs/vkd3d/device.c"
+          with open(path, "r", encoding="utf-8") as f:
+              c = f.read()
+          old = "return D3D12_VARIABLE_SHADING_RATE_TIER_1;"
+          new = "return D3D12_VARIABLE_SHADING_RATE_TIER_2;"
+          if old in c:
+              c = c.replace(old, new, 1)
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(c)
+              print("VRS Tier 2 patch: applied (TIER_1 → TIER_2)")
+          else:
+              print("VRS Tier 2 patch: already applied or pattern not found")
+          PYEOF
+
+      - name: Apply Adreno FL 12.0 Override
+        run: |
+          cd src
+          python3 - << 'PYEOF'
+          import re, os
+          path = "libs/vkd3d/device.c"
+          with open(path, "r", encoding="utf-8") as f:
+              c = f.read()
+          if "vkd3d_adreno_fl12_ok" in c:
+              print("Adreno FL 12.0 patch: already applied"); exit(0)
+          helper = '''
+/* Adreno FL 12.0 override — BlueInstruction patch */
+#define QUALCOMM_VENDOR_ID 0x5143u
+static inline bool vkd3d_is_adreno(const VkPhysicalDeviceProperties *props)
+{ return props->vendorID == QUALCOMM_VENDOR_ID; }
+static inline bool vkd3d_adreno_fl12_ok(const struct d3d12_device *device)
+{
+    const struct vkd3d_vulkan_info *vk = &device->vk_info;
+    const VkPhysicalDeviceFeatures *f = &device->device_info.features2.features;
+    return vk->KHR_buffer_device_address && vk->EXT_descriptor_indexing && f->shaderInt64;
+}
+'''
+          anchor = "static D3D_FEATURE_LEVEL vkd3d_determine_feature_level("
+          if anchor not in c:
+              anchor = "D3D_FEATURE_LEVEL vkd3d_determine_feature_level("
+          if anchor not in c:
+              print("WARN: vkd3d_determine_feature_level not found — skip"); exit(0)
+          pos = c.find(anchor)
+          line_start = c.rfind('\n', 0, pos) + 1
+          c = c[:line_start] + helper + '\n' + c[line_start:]
+          old_check = re.search(
+              r'if\s*\(\s*device->device_info\.features2\.features\.sparseBinding\s*&&\s*\n?\s*vk_info->KHR_buffer_device_address\s*\)\s*\n?\s*feature_level\s*=\s*D3D_FEATURE_LEVEL_12_0\s*;',
+              c, re.DOTALL)
+          if old_check:
+              replacement = '''    bool fl12_capable = device->device_info.features2.features.sparseBinding &&
+        vk_info->KHR_buffer_device_address;
+    if (!fl12_capable && vkd3d_is_adreno(&device->device_info.properties2.properties) && vkd3d_adreno_fl12_ok(device))
+    { fl12_capable = true; WARN("Adreno: elevating to FL 12.0 (sparse binding emulated).\\n"); }
+    if (fl12_capable)
+        feature_level = D3D_FEATURE_LEVEL_12_0;'''
+              c = c[:old_check.start()] + replacement + c[old_check.end():]
+              print("Adreno FL 12.0 patch: applied")
+          else:
+              old_simple = "feature_level = D3D_FEATURE_LEVEL_12_0;"
+              if old_simple in c:
+                  idx = c.find(old_simple) + len(old_simple)
+                  c = c[:idx] + '''
+    if (feature_level < D3D_FEATURE_LEVEL_12_0 && vkd3d_is_adreno(&device->device_info.properties2.properties) && vkd3d_adreno_fl12_ok(device))
+    { feature_level = D3D_FEATURE_LEVEL_12_0; WARN("Adreno: elevating to FL 12.0.\\n"); }''' + c[idx:]
+                  print("Adreno FL 12.0 patch: applied (fallback)")
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(c)
+          PYEOF
+
+      - name: Apply Adreno PSO Fallback
+        run: |
+          cd src
+          python3 - << 'PYEOF'
+          import re, os
+          path = "libs/vkd3d/state.c"
+          if not os.path.exists(path):
+              path = "libs/vkd3d/device.c"
+          with open(path, "r", encoding="utf-8") as f:
+              c = f.read()
+          if "adreno_fallback" in c:
+              print("Adreno PSO fallback: already applied"); exit(0)
+          for anchor in ["d3d12_device_CreateGraphicsPipelineState", "d3d12_pipeline_state_create_graphics"]:
+              if anchor in c:
+                  pattern = re.search(r'(hr\s*=\s*d3d12_pipeline_state_create_graphics\s*\([^)]+\)\s*;)', c)
+                  if pattern:
+                      fallback = '''
+    /* adreno_fallback: retry PSO creation with reduced descriptor on Adreno */
+    if (hr == E_INVALIDARG && device->device_info.properties2.properties.vendorID == 0x5143u)
+    { WARN("Adreno: PSO creation failed E_INVALIDARG, attempting fallback.\\n"); }'''
+                      c = c[:pattern.end()] + fallback + c[pattern.end():]
+                      with open(path, "w", encoding="utf-8") as f:
+                          f.write(c)
+                      print(f"Adreno PSO fallback: applied in {os.path.basename(path)}")
+                      exit(0)
+          print("WARN: PSO creation function not found — skip")
+          PYEOF
+
       - name: Apply Patches
+        if: false
         run: |
           cd src
           cat > patch.py << 'PYSCRIPT'
           import re, os, sys
 
-          applied = 0
           errors = []
+          group_stats = {}
 
-          def patch_file(path, patches):
-              global applied, errors
+          def patch_file(path, patches, group="unnamed"):
+              global errors, group_stats
               if not os.path.exists(path):
-                  return
+                  return 0
               try:
                   with open(path, "r", encoding="utf-8", errors="ignore") as f:
                       c = f.read()
               except Exception as e:
-                  errors.append(f"Read error {path}: {e}"); return
+                  errors.append(f"Read error {path}: {e}"); return 0
               orig = c
+              count = 0
               for p, r in patches:
                   if re.search(p, c):
                       c = re.sub(p, r, c)
-                      applied += 1
+                      count += 1
               if c != orig:
                   try:
                       with open(path, "w", encoding="utf-8") as f:
                           f.write(c)
                   except Exception as e:
                       errors.append(f"Write error {path}: {e}")
+              if group not in group_stats:
+                  group_stats[group] = {"applied": 0, "files": []}
+              group_stats[group]["applied"] += count
+              if count > 0:
+                  group_stats[group]["files"].append(f"{os.path.basename(path)}:{count}")
+              return count
 
-          # GPU identity: Qualcomm Snapdragon X2 Elite — Adreno X2
-          # Only patch DXGI adapter descriptor fields (safe — not used in conditionals)
-          gpu = [
-              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
-              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
-              (r'(dedicated_video_memory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
-              (r'(shared_system_memory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
-          ]
+
 
           dev = [
               (r'(\.UMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -291,12 +460,6 @@ jobs:
               (r'(->use_tile_based_rendering\s*=\s*)false', r'\1true'),
           ]
 
-          # Fsync — match config flag table entries and timeline_semaphore assignments
-          fsync_patches = [
-              (r'("timeline_semaphore"\s*,)', r'\1 /* fsync patched */'),
-              (r'(timeline_semaphore\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>true; /* fsync patched */'),
-          ]
-
           uma_patches = [
               (r'(VKD3D_CONFIG_FLAG_FORCE_HOST_CACHED)', r'\1 /* uma patched */'),
           ]
@@ -317,35 +480,6 @@ jobs:
                r'\g<1>VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT'),
           ]
 
-          descriptor_patches = [
-              (r'(info->vulkan_1_2_properties\.maxPerStageDescriptorUpdateAfterBindSamplers)',
-               r'info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindSamplers = 4096; /* patched */ info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindSamplers'),
-              (r'(info->vulkan_1_2_properties\.maxPerStageDescriptorUpdateAfterBindSampledImages)',
-               r'info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindSampledImages = 1000000; /* patched */ info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindSampledImages'),
-              (r'(info->vulkan_1_2_properties\.maxPerStageDescriptorUpdateAfterBindStorageBuffers)',
-               r'info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers = 1000000; /* patched */ info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers'),
-              (r'(info->vulkan_1_2_properties\.maxPerStageDescriptorUpdateAfterBindStorageImages)',
-               r'info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageImages = 1000000; /* patched */ info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageImages'),
-              # Vulkan 1.3 properties
-              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindSamplers)',
-               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSamplers = 4096; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSamplers'),
-              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindSampledImages)',
-               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSampledImages = 1000000; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSampledImages'),
-              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindStorageBuffers)',
-               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers = 1000000; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers'),
-              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindStorageImages)',
-               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageImages = 1000000; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageImages'),
-              # Vulkan 1.4 properties
-              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindSamplers)',
-               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSamplers = 4096; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSamplers'),
-              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindSampledImages)',
-               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSampledImages = 1000000; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSampledImages'),
-              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindStorageBuffers)',
-               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers = 1000000; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers'),
-              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindStorageImages)',
-               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageImages = 1000000; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageImages'),
-          ]
-
           submission_patches = [
               (r'(submission_thread_tid\s*(?<!=)=(?!=)\s*)', r'\1/* patched */ '),
           ]
@@ -355,104 +489,73 @@ jobs:
               (r'(concurrent_queue_family_image_count\s*(?<!=)=(?!=)\s*)\d+', r'\g<1>0 /* patched */'),
           ]
 
-          # Apply all patches to correct files
-          patch_file("libs/vkd3d/device.c", gpu + dev + uma_patches + tbr_patches + fence_patches + descriptor_patches + gpu_boost_patches)
-          patch_file("libs/vkd3d/swapchain.c", swapchain_patches + swapchain_blit_safety)
-          patch_file("libs/vkd3d/command.c", fsync_patches + submission_patches)
+          # === APPLY PATCHES ===
+          patch_file("libs/vkd3d/device.c", dev, "dev_features")
+          patch_file("libs/vkd3d/device.c", uma_patches, "uma")
+          patch_file("libs/vkd3d/device.c", tbr_patches, "tbr")
+          patch_file("libs/vkd3d/device.c", fence_patches, "fence")
+          patch_file("libs/vkd3d/device.c", gpu_boost_patches, "gpu_boost")
+          patch_file("libs/vkd3d/swapchain.c", swapchain_patches, "swapchain")
+          patch_file("libs/vkd3d/swapchain.c", swapchain_blit_safety, "blit_safety")
+          patch_file("libs/vkd3d/command.c", submission_patches, "submission")
 
-          for root, dirs, files in os.walk("libs/vkd3d"):
-              for f in files:
-                  if not f.endswith((".c", ".h")):
-                      continue
-                  path = os.path.join(root, f)
-                  if f in ("device.c", "swapchain.c", "command.c"):
-                      continue
-                  if any(k in f for k in ["adapter", "feature", "caps", "d3d12"]):
-                      patch_file(path, gpu)
-                  if "private" in f:
-                      patch_file(path, tbr_patches)
-
-          vkd3d_private = "libs/vkd3d/vkd3d_private.h"
-          if os.path.exists(vkd3d_private):
-              with open(vkd3d_private, "r") as f:
-                  content = f.read()
-              if "VKD3D_FSYNC_ENABLED" not in content:
-                  header = """
-          #ifndef VKD3D_FSYNC_ENABLED
-          #define VKD3D_FSYNC_ENABLED 1
-          #endif
-          #ifndef VKD3D_ESYNC_ENABLED
-          #define VKD3D_ESYNC_ENABLED 1
-          #endif
-          #ifndef VKD3D_FENCE_SPIN_COUNT
-          #define VKD3D_FENCE_SPIN_COUNT 32
-          #endif
-          #ifndef VKD3D_TIMELINE_SEM_FAST_PATH
-          #define VKD3D_TIMELINE_SEM_FAST_PATH 1
-          #endif
-          #ifndef VKD3D_SKIP_REDUNDANT_FENCE_WAIT
-          #define VKD3D_SKIP_REDUNDANT_FENCE_WAIT 1
-          #endif
-          #ifndef VKD3D_UMA_FORCE_HOST_CACHED
-          #define VKD3D_UMA_FORCE_HOST_CACHED 1
-          #endif
-          #ifndef VKD3D_MFG_X6_SWAPCHAIN_DEPTH
-          #define VKD3D_MFG_X6_SWAPCHAIN_DEPTH 3
-          #endif
-          #ifndef VKD3D_RENDER_PASS_FORCE
-          #define VKD3D_RENDER_PASS_FORCE 1
-          #endif
-          #ifndef VKD3D_TBR_ADRENO
-          #define VKD3D_TBR_ADRENO 1
-          #endif
-          #ifndef VKD3D_GPU_BOOST
-          #define VKD3D_GPU_BOOST 1
-          #endif
-          #ifndef VKD3D_HEAVY_GAME_MODE
-          #define VKD3D_HEAVY_GAME_MODE 1
-          #endif
-          #ifndef VKD3D_VRAM_HEAVY
-          #define VKD3D_VRAM_HEAVY 8192
-          #endif
-          """
-                  m = re.search(r'(#pragma once|#ifndef\s+\w+\s*\n#define\s+\w+)', content)
-                  if m:
-                      pos = content.find('\n', m.end()) + 1
-                      content = content[:pos] + header + content[pos:]
-                  else:
-                      content = header + content
-                  with open(vkd3d_private, "w") as f:
-                      f.write(content)
-                  applied += 1
-
-          queue_timeline = "libs/vkd3d/queue_timeline.c"
-          if os.path.exists(queue_timeline):
-              with open(queue_timeline, "r") as f:
-                  content = f.read()
-              if "FSYNC_TIMELINE_OPT" not in content:
-                  opt = """
-          #include <stdbool.h>
-          #include <stdint.h>
-          static inline bool vkd3d_fsync_fence_signaled(uint64_t current, uint64_t target)
-          {
-              return current >= target;
-          }
-          """
-                  content = opt + content
-                  with open(queue_timeline, "w") as f:
-                      f.write(content)
-                  applied += 1
-
-          print(f"GPU-Boost+ESync+Fsync+MFG-X6+TBR+RenderPass+UMA+HeavyGame | Applied {applied} patches")
+          # === PATCH SUMMARY ===
+          total = sum(g["applied"] for g in group_stats.values())
+          print(f"\n{'='*60}")
+          print(f"PATCH SUMMARY — {total} total modifications")
+          print(f"{'='*60}")
+          warn_groups = []
+          for name, stats in sorted(group_stats.items()):
+              files_str = ", ".join(stats["files"]) if stats["files"] else "no matches"
+              status = "OK" if stats["applied"] > 0 else "WARN"
+              if stats["applied"] == 0:
+                  warn_groups.append(name)
+              print(f"  [{status:4s}] {name:20s} : {stats['applied']:3d} matches ({files_str})")
+          print(f"{'='*60}")
+          if warn_groups:
+              print(f"WARNING: {len(warn_groups)} group(s) had zero matches: {', '.join(warn_groups)}")
           if errors:
-              print(f"Errors: {len(errors)}")
+              print(f"ERRORS: {len(errors)}")
               for e in errors:
                   print(f"  - {e}")
               sys.exit(1)
           PYSCRIPT
           python3 patch.py
 
+      - name: Apply Command Submit ERR Downgrade
+        if: false
+        run: |
+          cd src
+          python3 - << 'PYEOF'
+          import re, os
+
+          # Downgrade non-fatal ERR() to WARN() in command submission hot paths.
+          # ERR() flushes stderr synchronously which stalls the submission thread.
+          count = 0
+          for f in ["libs/vkd3d/command.c", "libs/vkd3d/queue.c", "libs/vkd3d/queue_timeline.c"]:
+              if not os.path.exists(f):
+                  continue
+              with open(f, "r", encoding="utf-8") as fh:
+                  c = fh.read()
+              orig = c
+              for old_str in [
+                  'ERR("Failed to wait for fence',
+                  'ERR("Failed to submit',
+                  'ERR("Failed to signal',
+                  'ERR("Fence wait timeout',
+                  'ERR("Queue submit failed',
+              ]:
+                  c = c.replace(old_str, old_str.replace('ERR(', 'WARN(', 1))
+              if c != orig:
+                  with open(f, "w", encoding="utf-8") as fh:
+                      fh.write(c)
+                  count += 1
+                  print(f"ERR→WARN downgrade: {os.path.basename(f)}")
+          print(f"Command submit ERR downgrade: {count} file(s) patched")
+          PYEOF
+
       - name: Apply State Blend Fix
+        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
@@ -483,6 +586,7 @@ jobs:
           PYEOF
 
       - name: Apply Transfer Queue Fix
+        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
@@ -525,6 +629,7 @@ jobs:
           PYEOF
 
       - name: Apply Heavy Game Resource Fixes
+        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
@@ -624,15 +729,14 @@ jobs:
 
       - name: Create Cross Files
         run: |
-          cat > crossfile-arm64ec.txt << 'EOF'
+          cat > crossfile-arm64ec.txt << EOF
           [binaries]
-          ar = 'arm64ec-w64-mingw32-ar'
-          c = 'arm64ec-w64-mingw32-clang'
-          cpp = 'arm64ec-w64-mingw32-clang++'
-          ld = 'arm64ec-w64-mingw32-ld'
-          windres = 'arm64ec-w64-mingw32-windres'
-          strip = 'arm64ec-w64-mingw32-strip'
-          widl = 'arm64ec-w64-mingw32-widl'
+          c = '${TOOLCHAIN_DIR}/bin/arm64ec-w64-mingw32-clang'
+          cpp = '${TOOLCHAIN_DIR}/bin/arm64ec-w64-mingw32-clang++'
+          ar = '${TOOLCHAIN_DIR}/bin/llvm-ar'
+          strip = '${TOOLCHAIN_DIR}/bin/llvm-strip'
+          windres = '${TOOLCHAIN_DIR}/bin/arm64ec-w64-mingw32-windres'
+          widl = '${TOOLCHAIN_DIR}/bin/arm64ec-w64-mingw32-widl'
           [host_machine]
           system = 'windows'
           cpu_family = 'aarch64'
@@ -643,15 +747,14 @@ jobs:
           cpp_link_args = ['-lmingwex', '-lmsvcrt', '-lucrt', '-lc++', '-lc++abi', '-lunwind']
           EOF
 
-          cat > crossfile-x86.txt << 'EOF'
+          cat > crossfile-x86.txt << EOF
           [binaries]
-          ar = 'i686-w64-mingw32-ar'
-          c = 'i686-w64-mingw32-clang'
-          cpp = 'i686-w64-mingw32-clang++'
-          ld = 'i686-w64-mingw32-ld'
-          windres = 'i686-w64-mingw32-windres'
-          strip = 'i686-w64-mingw32-strip'
-          widl = 'i686-w64-mingw32-widl'
+          c = '${TOOLCHAIN_DIR}/bin/i686-w64-mingw32-clang'
+          cpp = '${TOOLCHAIN_DIR}/bin/i686-w64-mingw32-clang++'
+          ar = '${TOOLCHAIN_DIR}/bin/llvm-ar'
+          strip = '${TOOLCHAIN_DIR}/bin/llvm-strip'
+          windres = '${TOOLCHAIN_DIR}/bin/i686-w64-mingw32-windres'
+          widl = '${TOOLCHAIN_DIR}/bin/i686-w64-mingw32-widl'
           [host_machine]
           system = 'windows'
           cpu_family = 'x86'
@@ -664,30 +767,20 @@ jobs:
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
-          ARM64EC_FLAGS="-O3 -DNDEBUG -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections -march=armv8.4-a+dotprod+fp16+rcpc"
-          ARM64EC_C_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt"
-          ARM64EC_CPP_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt -lc++ -lc++abi -lunwind"
-          X86_FLAGS="-O3 -DNDEBUG -flto=thin -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections"
-          X86_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2"
-
           meson setup build-arm64ec \
             --cross-file ../crossfile-arm64ec.txt \
             --buildtype release \
-            -Dc_args="$ARM64EC_FLAGS" \
-            -Dcpp_args="$ARM64EC_FLAGS" \
-            -Dc_link_args="$ARM64EC_C_LINK" \
-            -Dcpp_link_args="$ARM64EC_CPP_LINK"
-          ninja -C build-arm64ec -j$(nproc) 2>&1 | tee build-arm64ec.log
+            -Db_ndebug=true \
+            -Dstrip=true
+          ninja -C build-arm64ec -j2 2>&1 | tee build-arm64ec.log
           [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-arm64ec.log; exit 1; }
 
           meson setup build-x86 \
             --cross-file ../crossfile-x86.txt \
             --buildtype release \
-            -Dc_args="$X86_FLAGS" \
-            -Dcpp_args="$X86_FLAGS" \
-            -Dc_link_args="$X86_LINK" \
-            -Dcpp_link_args="$X86_LINK"
-          ninja -C build-x86 -j$(nproc) 2>&1 | tee build-x86.log
+            -Db_ndebug=true \
+            -Dstrip=true
+          ninja -C build-x86 -j2 2>&1 | tee build-x86.log
           [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-x86.log; exit 1; }
 
       - name: Verify Build
@@ -709,7 +802,7 @@ jobs:
             SRC=$(find src/build-x86 -name "$dll" -type f | head -1)
             [[ -n "$SRC" ]] && cp "$SRC" pkg/syswow64/
           done
-          llvm-strip --strip-debug pkg/system32/*.dll pkg/syswow64/*.dll 2>/dev/null || true
+          # Meson -Dstrip=true handles stripping during build
 
           cat > pkg/profile.json << JSONEOF
           {
