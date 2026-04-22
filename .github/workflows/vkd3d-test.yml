@@ -345,6 +345,7 @@ jobs:
           PYEOF
 
       - name: Apply Adreno PSO Fallback
+        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
