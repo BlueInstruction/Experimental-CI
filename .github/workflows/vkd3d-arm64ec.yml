@@ -301,7 +301,7 @@ jobs:
           #
           # See the upstream HansKristian-Work/vkd3d-proton README for the full
           # list of VKD3D_CONFIG flags and environment variables.
-          # CFGEOF
+          CFGEOF
 
           cat > pkg/profile.json << JSONEOF
           {

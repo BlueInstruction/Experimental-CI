@@ -896,7 +896,7 @@ jobs:
           #   * Root signature descriptor limits raised to 1M
           #   * Command submit ERR→WARN downgrade (reduces stderr stalls)
           #   * Swapchain blit safety (forces render-pass present path)
-          # CFGEOF
+          CFGEOF
 
           cat > pkg/profile.json << JSONEOF
           {
