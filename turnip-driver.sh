@@ -318,18 +318,22 @@ clone_mesa() {
 }
 
 update_vulkan_headers() {
-    # Stable releases (latest_release, staging_branch, custom_tag) ship headers
-    # that match their generated code — overwriting them with bleeding-edge
-    # Vulkan-Headers breaks the build (e.g. EXT→KHR promotions remove aliases
-    # that the generated vk_enum_to_str.c still references).
-    case "$MESA_SOURCE" in
-        latest_release|staging_branch|custom_tag)
-            log_info "Skipping Vulkan/SPIRV header update (stable release — bundled headers match generated code)"
-            return 0
-            ;;
-    esac
+    # Mesa ships its own copy of Vulkan-Headers and SPIRV-Headers that matches
+    # the code it generates (vk_enum_to_str.c, vk_extensions.c, etc.). When we
+    # overwrite them with bleeding-edge KhronosGroup/main, EXT→KHR promotions
+    # remove aliases that the generated code still references — build breaks with:
+    #
+    #   error: use of undeclared identifier 'VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT';
+    #
+    # Always skip the overwrite. If a specific Mesa branch genuinely needs newer
+    # headers, set UPDATE_VULKAN_HEADERS=1 explicitly.
+    if [[ "${UPDATE_VULKAN_HEADERS:-0}" != "1" ]]; then
+        log_info "Skipping Vulkan/SPIRV header update (Mesa ships matching headers). Set UPDATE_VULKAN_HEADERS=1 to override."
+        return 0
+    fi
 
     # ── Vulkan Headers (latest release) ────────────────────────────────────────
+    log_warn "UPDATE_VULKAN_HEADERS=1 — this may break the build if Mesa uses old EXT aliases"
     log_info "Updating Vulkan headers to latest release"
     local hdr_dir="${WORKDIR}/vk-headers"
     git clone --depth=1 "$VULKAN_HEADERS_REPO" "$hdr_dir" 2>/dev/null || {
