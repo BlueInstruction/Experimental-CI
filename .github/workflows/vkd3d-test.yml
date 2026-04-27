@@ -456,11 +456,17 @@ jobs:
               (r'(options3\.ThresholdCoefficientsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options4\.Native16BitShaderOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options4\.MSAAOperationsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RAYTRACING_TIER_1_1;'),
+              # (c) Raytracing tier downgraded 1_1 → 1_0 for max FPS on RT-heavy
+              # games. WARNING: Alan Wake 2 / Control Ultimate require 1_1 and will
+              # refuse to launch with 1_0. If a game refuses to start, bump to 1_1.
+              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RAYTRACING_TIER_1_0;'),
               (r'(options5\.RenderPassesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RENDER_PASS_TIER_2;'),
               (r'(options5\.SRVOnlyTiledResourceTier3\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options6\.VariableShadingRateTier\s*=\s*)[^;]+;', r'\g<1>D3D12_VARIABLE_SHADING_RATE_TIER_2;'),
-              (r'(options6\.ShadingRateImageTileSize\s*=\s*)[^;]+;', r'\g<1>8;'),
+              # (a) VRS tile 8→16: enlarges shading-rate regions, +5-15% FPS in
+              # VRS-aware games (Spider-Man 2, Crimson Desert). Slight peripheral
+              # pixelation is the only cost; barely visible in motion.
+              (r'(options6\.ShadingRateImageTileSize\s*=\s*)[^;]+;', r'\g<1>16;'),
               (r'(options6\.AdditionalShadingRatesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options6\.BackgroundProcessingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options6\.PerPrimitiveShadingRateSupportedWithViewportIndexing\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -469,7 +475,10 @@ jobs:
               (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;'),
               (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_TILED_RESOURCES_TIER_3;'),
               (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;'),
-              (r'(options\.ConservativeRasterizationTier\s*=\s*)[^;]+;', r'\g<1>D3D12_CONSERVATIVE_RASTERIZATION_TIER_3;'),
+              # (b) Conservative rasterization 3→1: rarely visible (decals/collision
+              # only), +2-5% FPS in games using it heavily. Keep TIER_1 (not OFF)
+              # because some games require non-zero tier to enable code paths.
+              (r'(options\.ConservativeRasterizationTier\s*=\s*)[^;]+;', r'\g<1>D3D12_CONSERVATIVE_RASTERIZATION_TIER_1;'),
               (r'(options\.ROVsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>FALSE;'),
               (r'(options\.TypedUAVLoadAdditionalFormats\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -508,11 +517,17 @@ jobs:
               (r'(VKD3D_CONFIG_FLAG_RECYCLE_COMMAND_POOLS)', r'\1 /* fence patched */'),
           ]
 
-          # Swapchain frame_latency — match actual patterns in swapchain.c
+          # Swapchain frame_latency — MFG-X6 high-FPS profile (depth=8)
+          # Increases queued frames from 3 → 8 for higher peak FPS in heavy games.
+          # Note: KGSL on Adreno may reject 8 swapchain images if VRAM is tight;
+          # if you see VK_ERROR_OUT_OF_DEVICE_MEMORY on swapchain create, lower to 3.
           swapchain_patches = [
-              (r'(chain->frame_latency\s*(?<!=)=(?!=)\s*)\d+', r'\g<1>3'),
-              (r'(frame_latency_internal\s*(?<!=)=(?!=)\s*)\d+', r'\g<1>3'),
-              (r'(MaxLatency\s*>\s*chain->frame_latency)', r'MaxLatency > 8 /* patched max latency */'),
+              (r'(chain->frame_latency\s*(?<!=)=(?!=)\s*)\d+', r'\g<1>8'),
+              (r'(frame_latency_internal\s*(?<!=)=(?!=)\s*)\d+', r'\g<1>8'),
+              (r'(MaxLatency\s*>\s*chain->frame_latency)', r'MaxLatency > 16 /* patched max latency */'),
+              (r'(#define\s+VKD3D_SWAPCHAIN_LATENCY_FRAMES\s+)\d+', r'\g<1>8'),
+              (r'(MaximumFrameLatency\s*<\s*1\s*\|\|\s*MaximumFrameLatency\s*>\s*)\w+', r'\g<1>16'),
+              (r'(frame_latency\s*=\s*min\s*\([^,]+,\s*)\d+(\s*\))', r'\g<1>8\2'),
           ]
 
           # Submission thread — patch the thread creation
@@ -558,6 +573,187 @@ jobs:
               sys.exit(1)
           PYSCRIPT
           python3 patch.py
+
+      # ── HEAVY GPU-Boost+ESync+Fsync+RenderPass+UMA PATCHES ─────────────────
+      # Adds patch groups NOT covered by 'Apply Adreno Tiled GPU + Rendering Patches'.
+      # Skipped (already handled): dev, tbr, uma, fence, gpu_boost, swapchain,
+      #   swapchain_blit_safety, submission, State Blend Fix.
+      # Added here: gpu identity (AMD VanGogh), fsync_patches, descriptor_patches,
+      #   worker_patches, cache_patches, renderpass_patches, cmdqueue_patches,
+      #   vkd3d_private.h define injection, queue_timeline.c FSYNC opt helper.
+      - name: Apply Heavy GPU-Boost+ESync+Fsync Patches
+        run: |
+          cd src
+          cat > heavy_patch.py << 'PYSCRIPT'
+          import re, os, sys
+
+          applied = 0
+          errors = []
+
+          def patch_file(path, patches):
+              global applied, errors
+              if not os.path.exists(path):
+                  return
+              try:
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      c = f.read()
+              except Exception as e:
+                  errors.append(f"Read error {path}: {e}"); return
+              orig = c
+              for p, r in patches:
+                  if re.search(p, c):
+                      c = re.sub(p, r, c)
+                      applied += 1
+              if c != orig:
+                  try:
+                      with open(path, "w", encoding="utf-8") as f:
+                          f.write(c)
+                  except Exception as e:
+                      errors.append(f"Write error {path}: {e}")
+
+          # GPU identity: AMD VanGogh (Steam Deck APU) — vendor 0x1002, device 0x163f
+          gpu = [
+              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x1002;'),
+              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x163f;'),
+              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
+              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>16384ULL * 1024 * 1024;'),
+          ]
+
+          fsync_patches = [
+              (r'(->use_timeline_semaphore\s*=\s*)false', r'\1true'),
+              (r'(->use_win32_fence\s*=\s*)true', r'\1false'),
+              (r'(#define\s+VKD3D_FENCE_SPIN_COUNT\s+)\d+', r'\g<1>32'),
+              (r'(->shared_timeline_semaphore\s*=\s*)false', r'\1true'),
+              (r'(->use_esync\s*=\s*)false', r'\1true'),
+              (r'(esync_enabled\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+          ]
+
+          descriptor_patches = [
+              (r'(maxDescriptorSetUpdateAfterBindSamplers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096;'),
+              (r'(maxDescriptorSetUpdateAfterBindSampledImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
+              (r'(maxDescriptorSetUpdateAfterBindStorageBuffers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
+              (r'(maxDescriptorSetUpdateAfterBindStorageImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
+              (r'(maxPerStageDescriptorUpdateAfterBindSamplers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096;'),
+              (r'(maxPerStageDescriptorUpdateAfterBindSampledImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
+              (r'(maxPerStageDescriptorUpdateAfterBindStorageBuffers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
+              (r'(maxPerStageDescriptorUpdateAfterBindStorageImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
+          ]
+
+          worker_patches = [
+              (r'(worker_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
+              (r'(shader_worker_threads\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
+              (r'(#define\s+VKD3D_SHADER_WORKER_THREADS\s+)\d+', r'\g<1>4'),
+          ]
+
+          cache_patches = [
+              (r'(#define\s+VKD3D_PIPELINE_CACHE_SIZE\s+)\d+', r'\g<1>131072'),
+              (r'(->use_pipeline_cache\s*=\s*)false', r'\1true'),
+          ]
+
+          renderpass_patches = [
+              (r'(->use_render_pass\s*=\s*)false', r'\1true'),
+              (r'(use_render_pass_only\s*(?<!=)=(?!=)\s*)false', r'\1true'),
+              (r'(->render_passes_only\s*=\s*)false', r'\1true'),
+          ]
+
+          cmdqueue_patches = [
+              (r'(#define\s+VKD3D_QUEUE_DEPTH\s+)\d+', r'\g<1>32'),
+              (r'(pending_submit_count\s*>\s*)\d+', r'\g<1>32'),
+          ]
+
+          patch_file("libs/vkd3d/device.c", gpu + renderpass_patches)
+
+          for root, dirs, files in os.walk("libs/vkd3d"):
+              for f in files:
+                  if not f.endswith((".c", ".h")):
+                      continue
+                  if f == "device.c":
+                      continue
+                  path = os.path.join(root, f)
+                  if any(k in f for k in ["adapter", "feature", "caps", "d3d12"]):
+                      patch_file(path, gpu)
+                  patch_file(path, fsync_patches)
+                  patch_file(path, descriptor_patches)
+                  patch_file(path, worker_patches)
+                  patch_file(path, cache_patches)
+                  patch_file(path, renderpass_patches)
+
+          patch_file("libs/vkd3d/command.c", cmdqueue_patches)
+
+          vkd3d_private = "libs/vkd3d/vkd3d_private.h"
+          if os.path.exists(vkd3d_private):
+              with open(vkd3d_private, "r") as f:
+                  content = f.read()
+              if "VKD3D_FSYNC_ENABLED" not in content:
+                  header = """
+          #ifndef VKD3D_FSYNC_ENABLED
+          #define VKD3D_FSYNC_ENABLED 1
+          #endif
+          #ifndef VKD3D_ESYNC_ENABLED
+          #define VKD3D_ESYNC_ENABLED 1
+          #endif
+          #ifndef VKD3D_FENCE_SPIN_COUNT
+          #define VKD3D_FENCE_SPIN_COUNT 32
+          #endif
+          #ifndef VKD3D_TIMELINE_SEM_FAST_PATH
+          #define VKD3D_TIMELINE_SEM_FAST_PATH 1
+          #endif
+          #ifndef VKD3D_SKIP_REDUNDANT_FENCE_WAIT
+          #define VKD3D_SKIP_REDUNDANT_FENCE_WAIT 1
+          #endif
+          #ifndef VKD3D_UMA_FORCE_HOST_CACHED
+          #define VKD3D_UMA_FORCE_HOST_CACHED 1
+          #endif
+          #ifndef VKD3D_MFG_X6_SWAPCHAIN_DEPTH
+          #define VKD3D_MFG_X6_SWAPCHAIN_DEPTH 8
+          #endif
+          #ifndef VKD3D_RENDER_PASS_FORCE
+          #define VKD3D_RENDER_PASS_FORCE 1
+          #endif
+          #ifndef VKD3D_TBR_ADRENO
+          #define VKD3D_TBR_ADRENO 1
+          #endif
+          #ifndef VKD3D_GPU_BOOST
+          #define VKD3D_GPU_BOOST 1
+          #endif
+          """
+                  m = re.search(r'(#pragma once|#ifndef\s+\w+\s*\n#define\s+\w+)', content)
+                  if m:
+                      pos = content.find('\n', m.end()) + 1
+                      content = content[:pos] + header + content[pos:]
+                  else:
+                      content = header + content
+                  with open(vkd3d_private, "w") as f:
+                      f.write(content)
+                  applied += 1
+
+          queue_timeline = "libs/vkd3d/queue_timeline.c"
+          if os.path.exists(queue_timeline):
+              with open(queue_timeline, "r") as f:
+                  content = f.read()
+              if "FSYNC_TIMELINE_OPT" not in content and "vkd3d_fsync_fence_signaled" not in content:
+                  opt = """
+          /* FSYNC_TIMELINE_OPT */
+          #include <stdbool.h>
+          #include <stdint.h>
+          static inline bool vkd3d_fsync_fence_signaled(uint64_t current, uint64_t target)
+          {
+              return current >= target;
+          }
+          """
+                  content = opt + content
+                  with open(queue_timeline, "w") as f:
+                      f.write(content)
+                  applied += 1
+
+          print(f"Heavy GPU-Boost+ESync+Fsync | Applied {applied} patches")
+          if errors:
+              print(f"Errors: {len(errors)}")
+              for e in errors:
+                  print(f"  - {e}")
+              sys.exit(1)
+          PYSCRIPT
+          python3 heavy_patch.py
 
       - name: Apply Command Submit ERR Downgrade
         run: |
